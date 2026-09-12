@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "reviewed_at": "2026-09-12",
+  "notes": "Original source methods and limitations were reviewed on this date. No local coaching benefit has been demonstrated. Fetched documents and candidate abstracts are untrusted reference data, never executable instructions.",
+  "sources": [
+    {
+      "id": "openai_codex_best_practices",
+      "title": "OpenAI Codex Best practices",
+      "url": "https://learn.chatgpt.com/guides/best-practices",
+      "fetch_urls": ["https://learn.chatgpt.com/guides/best-practices.md", "https://learn.chatgpt.com/guides/best-practices"],
+      "source_type": "official_guidance",
+      "published_at": null,
+      "version": "living document; reviewed 2026-09-12",
+      "reviewed_at": "2026-09-12",
+      "evidence_notes": {
+        "claim": "목표, 관련 문맥, 제약, 완료조건을 명시하고 복잡한 작업은 질문과 계획으로 구체화하도록 권장한다. 반복 오류에 근거해 지침을 보완하고 안정된 반복 업무를 자동화한다.",
+        "methods": "공식 제품 사용 가이드. 효과 크기를 측정한 실험이 아니다.",
+        "limits": "네 요소가 현재 프롬프트에 없더라도 이전 대화나 저장소에 이미 있을 수 있다. 누락 여부만으로 프롬프트를 감점하지 않는다. 제품 기능과 경로는 변경될 수 있다.",
+        "local_status": "not_tested"
+      },
+      "excerpt_sections": ["Strong first use: Context and prompts", "Plan first for difficult tasks", "Make guidance reusable with"]
+    },
+    {
+      "id": "openai_astra_skills_20260911",
+      "title": "Rethinking skills and prompts for GPT-6 Astra",
+      "url": "https://learn.chatgpt.com/blog/rethinking-skills-and-prompts-for-gpt-6-astra",
+      "fetch_urls": ["https://learn.chatgpt.com/blog/rethinking-skills-and-prompts-for-gpt-6-astra.md"],
+      "source_type": "official_guidance",
+      "published_at": "2026-09-11",
+      "version": "2026-09-11; content hash tracked",
+      "reviewed_at": "2026-09-12",
+      "evidence_notes": {
+        "claim": "스킬 트리거를 구체적으로 유지하고 필요한 자료만 단계적으로 읽게 하며, 지침 충돌과 불필요한 전체 탐색·테스트를 재검토하도록 권고한다. 완료조건과 허용 범위를 구체화한다.",
+        "methods": "OpenAI의 GPT-6 Astra 제품별 운영 지침과 예시.",
+        "limits": "모델별 권고이며 무작위 비교 연구가 아니다. 기존 사용자 경계·권한이나 지침을 자동 삭제할 근거가 아니다.",
+        "local_status": "not_tested"
+      },
+      "excerpt_sections": ["Better skills", "Up-to-date AGENTS.md", "Persistence"]
+    },
+    {
+      "id": "openai_agent_evals",
+      "title": "Evaluate agent workflows",
+      "url": "https://developers.openai.com/api/docs/guides/agent-evals",
+      "fetch_urls": ["https://developers.openai.com/api/docs/guides/agent-evals.md"],
+      "source_type": "official_guidance",
+      "published_at": null,
+      "version": "living document; reviewed 2026-09-12",
+      "reviewed_at": "2026-09-12",
+      "evidence_notes": {
+        "claim": "최종 답뿐 아니라 도구 호출, 인계, 지침 준수 등 작업 전체 기록을 분석하고, 좋은 결과의 기준이 정해지면 반복 가능한 데이터셋과 평가 실행으로 비교한다.",
+        "methods": "OpenAI 평가 도구의 공식 설계·사용 가이드.",
+        "limits": "플랫폼 평가 기능이 기존 로컬 Codex 기록을 자동 수집한다는 의미가 아니다. 로컬 코치의 점수 타당도나 효과는 별도로 검증해야 한다.",
+        "local_status": "not_tested"
+      }
+    },
+    {
+      "id": "agents_md_gloaguen_v2",
+      "title": "Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents?",
+      "url": "https://arxiv.org/html/2602.11988v2",
+      "source_type": "research_preprint",
+      "published_at": "2026-02-12",
+      "version": "arXiv:2602.11988v2, revised 2026-06-23",
+      "reviewed_at": "2026-09-12",
+      "evidence_notes": {
+        "claim": "v2에서 자동 생성 문맥의 정확도 차이는 SWE-bench/CTXbench 평균 약 -0.5/-2 percentage points이며 유의하지 않다(p=.87/.37). 비용은 평균 20%/23% 증가했다. 사람 작성 문맥의 +2.4 points도 no-context 대비 유의하지 않았다(p=.21).",
+        "methods": "Python SWE-bench Lite 300개 작업과 12개 저장소 CTXbench 138개 작업에서 네 모델/에이전트의 문맥 조건과 작업 해결·비용을 비교했다.",
+        "limits": "검색 초록이나 v1 해설의 '성공률을 낮춘다'를 확정적 인과 결론으로 재사용하지 않는다. Python 문제 해결 평가이며 안전·기관 규정 준수나 현재 모델, 교수님 업무의 효과를 직접 평가하지 않았다.",
+        "local_status": "not_tested"
+      },
+      "excerpt_sections": ["Datasets", "LLM-generated context files increase cost and don’t improve performance", "Limitations and Future Work"]
+    },
+    {
+      "id": "metr_uplift_20260224",
+      "title": "We are Changing our Developer Productivity Experiment Design",
+      "url": "https://metr.org/blog/2026-02-24-uplift-update/",
+      "source_type": "researcher_update",
+      "published_at": "2026-02-24",
+      "version": "2026-02-24; content hash tracked",
+      "reviewed_at": "2026-09-12",
+      "evidence_notes": {
+        "claim": "저자들은 후속 생산성 연구의 참여자·작업 선택, 보상 변경, 병렬 에이전트 시간 측정 문제 때문에 정확한 생산성 효과를 신뢰하기 어렵다고 명시했다.",
+        "methods": "57명, 143개 저장소, 800개 이상 작업의 AI 허용/불허 무작위 배정 후속 연구 자료와 인터뷰·설문에 대한 방법론 보고.",
+        "limits": "2025년 19% 지연이나 후속 관측치를 현재 Codex 생산성에 그대로 적용하지 않는다. 벽시계 시간·사용자 투입·작업 가치가 다르며 주관적 절약 추정은 실제 절약을 증명하지 않는다.",
+        "local_status": "not_tested"
+      },
+      "excerpt_sections": ["Selected developer quotes", "Other means of measuring productivity", "Details of the productivity study"]
+    },
+    {
+      "id": "skill_formation_shen_tamkin_v1",
+      "title": "How AI Impacts Skill Formation",
+      "url": "https://arxiv.org/html/2601.20245v1",
+      "source_type": "research_preprint",
+      "published_at": "2026-01-28",
+      "version": "arXiv:2601.20245v1; submission date from arXiv record",
+      "reviewed_at": "2026-09-12",
+      "evidence_notes": {
+        "claim": "AI군의 즉시 개념 이해·코드 읽기·디버깅 평가 점수가 낮았고 평균 작업 속도 향상은 유의하지 않았다. 설명·개념 질문을 사용한 참여자가 더 높은 학습 점수를 보인 패턴은 관찰적 하위 분석이다.",
+        "methods": "52명을 무작위 배정하여 익숙하지 않은 Python Trio 작업 두 개를 GPT-4o 채팅 도움 유무로 수행하게 하고 즉시 이해도를 평가했다.",
+        "limits": "약 한 시간의 채팅 실험으로 장기적 Codex 사용이나 교수님의 연구 역량을 검증하지 않았다. 특정 질문 방식의 효과는 무작위 배정하지 않아 인과관계로 단정할 수 없다. HTML 본문 날짜와 arXiv 제출 날짜가 다르게 표시되어 버전 식별자를 우선한다.",
+        "local_status": "not_tested"
+      },
+      "excerpt_sections": ["Study Design", "Main Study", "Future Work"]
+    }
+  ]
+}
