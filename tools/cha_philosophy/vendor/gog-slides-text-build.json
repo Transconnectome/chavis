@@ -1,0 +1,20 @@
+{
+  "upstream": "https://github.com/steipete/gogcli",
+  "upstream_commit": "c18c58c8daadce2d6b4a6cf4fe95b1e3817bae1b",
+  "upstream_tag": "v0.12.0",
+  "patch_file": "gog-read-presentation-text.patch",
+  "patch_sha256": "4d91a9cd2cb33956ba575215568237b56a28050c9b2fabdd34635fe05438757a",
+  "tested_binary_sha256": "a1b90658004e31954ca2ba60c276ca04df6155287cdc90fd8d9cd5807d6d69f5",
+  "build_toolchain": "go1.25.8 linux/arm64",
+  "build_command": "go build -trimpath -o ../gog-slides-text ./cmd/gog",
+  "upstream_binary_replaced": false,
+  "python_suite": {
+    "passed": 679,
+    "seconds": 47.68
+  },
+  "limitations": [
+    "API response JSON decoding has no streaming byte cap; text and output budgets are separately enforced.",
+    "The local binary preserves existing provider authentication behavior; it creates no new login or token store.",
+    "WordArt and absent viewer revision supported; images, chart content and rendered layout remain outside extraction."
+  ]
+}

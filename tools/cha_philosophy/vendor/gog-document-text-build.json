@@ -1,0 +1,97 @@
+{
+  "binary": {
+    "build_output": "/tmp/cha-gog-slides-906gbhhn/gog-document-text",
+    "installation_performed_by_this_task": false,
+    "root_managed_preserved_basename": "gog-document-text-v0.12.0-cha2",
+    "sha256": "d75ee57ff772e0adcea126ef5450d8197041f6e0b6ddfd0bfddae229d7cd4724"
+  },
+  "patch": {
+    "application_rule": "Apply this cumulative patch directly to the pinned original upstream commit. Do not apply it on top of gog-read-presentation-text.patch or combine the two patches.",
+    "cumulative": true,
+    "file": "gog-structured-document-text.patch",
+    "includes": [
+      "Slides read-presentation-text",
+      "Docs read-document-text",
+      "Docs-specific authenticated HTTP transport clone"
+    ],
+    "sha256": "b7c08c62c423f3613f9807050bf62eab5a18dd9bae02db4436f8b5801bcdbfb2"
+  },
+  "reproduction": {
+    "apply_argv": [
+      "git",
+      "apply",
+      "/home/juke/git/chavis/tools/cha_philosophy/vendor/gog-structured-document-text.patch"
+    ],
+    "build_and_test_environment": {
+      "CGO_ENABLED": "0",
+      "GOCACHE": "/tmp/cha-gog-slides-906gbhhn/gocache",
+      "GOENV": "off",
+      "GOMAXPROCS": "4",
+      "GOMODCACHE": "/tmp/cha-gog-slides-906gbhhn/gomodcache",
+      "GOPATH": "/tmp/cha-gog-slides-906gbhhn/gopath",
+      "GOPROXY": "off",
+      "GOSUMDB": "off",
+      "GOTMPDIR": "/tmp/cha-gog-slides-906gbhhn/gotmp",
+      "GOTOOLCHAIN": "local",
+      "PATH": "/tmp/cha-gog-slides-906gbhhn/go/bin:/usr/bin:/bin"
+    },
+    "build_argv": [
+      "/tmp/cha-gog-slides-906gbhhn/go/bin/go",
+      "build",
+      "-trimpath",
+      "-o",
+      "/tmp/cha-gog-slides-906gbhhn/gog-document-text",
+      "./cmd/gog"
+    ],
+    "dependency_preparation_argv": [
+      "/tmp/cha-gog-slides-906gbhhn/go/bin/go",
+      "mod",
+      "download"
+    ],
+    "dependency_preparation_environment": {
+      "GOPROXY": "https://proxy.golang.org",
+      "GOSUMDB": "sum.golang.org"
+    },
+    "environment_note": "Build and test subprocesses used the listed isolated environment, without inherited credential variables. Prepare the dedicated cache/temp directories and download pinned go.mod/go.sum dependencies before the offline build/test commands; relocate these temporary paths consistently when reproducing elsewhere.",
+    "test_argv": [
+      "/tmp/cha-gog-slides-906gbhhn/go/bin/go",
+      "test",
+      "./internal/cmd",
+      "./internal/googleapi",
+      "-run",
+      "^Test(DocsReadDocumentText|DocsTextRead|SlidesReadPresentationText)",
+      "-count=1",
+      "-timeout=120s",
+      "-json"
+    ],
+    "working_directory": "/tmp/cha-gog-slides-906gbhhn/gogcli"
+  },
+  "schema_version": 1,
+  "scope": {
+    "existing_slides_patch_and_manifest_preserved": true,
+    "runtime_binary_config_service_changes": "Managed separately by the root task; not performed by this preservation task."
+  },
+  "toolchain": {
+    "architecture": "arm64",
+    "os": "linux",
+    "verified_local_executable": "/tmp/cha-gog-slides-906gbhhn/go/bin/go",
+    "version": "go1.25.8"
+  },
+  "upstream": {
+    "base_commit": "c18c58c8daadce2d6b4a6cf4fe95b1e3817bae1b",
+    "repository": "https://github.com/steipete/gogcli",
+    "tag": "v0.12.0"
+  },
+  "validation": {
+    "applied_files_byte_equal_to_build_checkout": true,
+    "changed_files": 8,
+    "clean_pinned_base_patch_application_verified": true,
+    "cli_help_registration_verified": true,
+    "pass_event_count_note": "60 includes the 17 top-level test pass events and their subtests; these are not 60 independent top-level tests.",
+    "real_authentication_or_network_tested_by_this_task": false,
+    "selected_test_failures": 0,
+    "selected_test_pass_events_including_subtests": 60,
+    "selected_test_top_level_passes": 17,
+    "test_scope": "Synthetic in-memory HTTP and fake authentication/service factories; includes Docs, Docs auth clone and existing Slides command regressions."
+  }
+}

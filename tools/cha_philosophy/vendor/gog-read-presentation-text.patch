@@ -1,0 +1,674 @@
+diff --git a/internal/cmd/slides.go b/internal/cmd/slides.go
+index 0997d91..54ae5c3 100644
+--- a/internal/cmd/slides.go
++++ b/internal/cmd/slides.go
+@@ -20,18 +20,19 @@ var debugSlides = false
+ var newSlidesService = googleapi.NewSlides
+ 
+ type SlidesCmd struct {
+-	Export             SlidesExportCmd             `cmd:"" name:"export" aliases:"download,dl" help:"Export a Google Slides deck (pdf|pptx)"`
+-	Info               SlidesInfoCmd               `cmd:"" name:"info" aliases:"get,show" help:"Get Google Slides presentation metadata"`
+-	Create             SlidesCreateCmd             `cmd:"" name:"create" aliases:"add,new" help:"Create a Google Slides presentation"`
+-	CreateFromMarkdown SlidesCreateFromMarkdownCmd `cmd:"" name:"create-from-markdown" help:"Create a Google Slides presentation from markdown"`
+-	CreateFromTemplate SlidesCreateFromTemplateCmd `cmd:"" name:"create-from-template" help:"Create a presentation from template with text replacements"`
+-	Copy               SlidesCopyCmd               `cmd:"" name:"copy" aliases:"cp,duplicate" help:"Copy a Google Slides presentation"`
+-	AddSlide           SlidesAddSlideCmd           `cmd:"" name:"add-slide" help:"Add a slide with a full-bleed image and optional speaker notes"`
+-	ListSlides         SlidesListSlidesCmd         `cmd:"" name:"list-slides" help:"List all slides with their object IDs"`
+-	DeleteSlide        SlidesDeleteSlideCmd        `cmd:"" name:"delete-slide" help:"Delete a slide by object ID"`
+-	ReadSlide          SlidesReadSlideCmd          `cmd:"" name:"read-slide" help:"Read slide content: speaker notes, text elements, and images"`
+-	UpdateNotes        SlidesUpdateNotesCmd        `cmd:"" name:"update-notes" help:"Update speaker notes on an existing slide"`
+-	ReplaceSlide       SlidesReplaceSlideCmd       `cmd:"" name:"replace-slide" help:"Replace the image on an existing slide in-place"`
++	Export               SlidesExportCmd               `cmd:"" name:"export" aliases:"download,dl" help:"Export a Google Slides deck (pdf|pptx)"`
++	Info                 SlidesInfoCmd                 `cmd:"" name:"info" aliases:"get,show" help:"Get Google Slides presentation metadata"`
++	Create               SlidesCreateCmd               `cmd:"" name:"create" aliases:"add,new" help:"Create a Google Slides presentation"`
++	CreateFromMarkdown   SlidesCreateFromMarkdownCmd   `cmd:"" name:"create-from-markdown" help:"Create a Google Slides presentation from markdown"`
++	CreateFromTemplate   SlidesCreateFromTemplateCmd   `cmd:"" name:"create-from-template" help:"Create a presentation from template with text replacements"`
++	Copy                 SlidesCopyCmd                 `cmd:"" name:"copy" aliases:"cp,duplicate" help:"Copy a Google Slides presentation"`
++	AddSlide             SlidesAddSlideCmd             `cmd:"" name:"add-slide" help:"Add a slide with a full-bleed image and optional speaker notes"`
++	ListSlides           SlidesListSlidesCmd           `cmd:"" name:"list-slides" help:"List all slides with their object IDs"`
++	DeleteSlide          SlidesDeleteSlideCmd          `cmd:"" name:"delete-slide" help:"Delete a slide by object ID"`
++	ReadSlide            SlidesReadSlideCmd            `cmd:"" name:"read-slide" help:"Read slide content: speaker notes, text elements, and images"`
++	ReadPresentationText SlidesReadPresentationTextCmd `cmd:"" name:"read-presentation-text" help:"Read bounded slide/group/table/notes text as JSON; recheck revision and order"`
++	UpdateNotes          SlidesUpdateNotesCmd          `cmd:"" name:"update-notes" help:"Update speaker notes on an existing slide"`
++	ReplaceSlide         SlidesReplaceSlideCmd         `cmd:"" name:"replace-slide" help:"Replace the image on an existing slide in-place"`
+ }
+ 
+ type SlidesExportCmd struct {
+diff --git a/internal/cmd/slides_read_presentation_text.go b/internal/cmd/slides_read_presentation_text.go
+new file mode 100644
+index 0000000..6570d12
+--- /dev/null
++++ b/internal/cmd/slides_read_presentation_text.go
+@@ -0,0 +1,320 @@
++package cmd
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"os"
++	"regexp"
++	"slices"
++	"strings"
++	"time"
++
++	api "google.golang.org/api/googleapi"
++	"google.golang.org/api/slides/v1"
++
++	"github.com/steipete/gogcli/internal/outfmt"
++)
++
++const (
++	slidesTextMaxBytes  = 32 * 1024 * 1024
++	slidesTextMaxDepth  = 8
++	slidesTextMaxSlides = 4096
++	slidesTextMaxNodes  = 200000
++)
++
++var slidesTextID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
++var slidesTextObjectID = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_:-]{0,255}$`)
++
++type SlidesReadPresentationTextCmd struct {
++	PresentationID string `arg:"" name:"presentationId" help:"Native presentation ID"`
++	MaxBytes       int    `name:"max-bytes" default:"33554432" help:"Maximum text and JSON output bytes (1024..33554432); excess fails without output"`
++}
++
++type slidesTextRecord struct {
++	ObjectID        string   `json:"objectId"`
++	Kind            string   `json:"kind"`
++	GroupPath       []string `json:"groupPath"`
++	PlaceholderType string   `json:"placeholderType,omitempty"`
++	RowIndex        *int     `json:"rowIndex,omitempty"`
++	CellIndex       *int     `json:"cellIndex,omitempty"`
++	Text            string   `json:"text"`
++}
++
++type slidesTextPage struct {
++	ObjectID string             `json:"objectId"`
++	Number   int                `json:"number"`
++	Elements []slidesTextRecord `json:"elements"`
++	Notes    []slidesTextRecord `json:"notes"`
++}
++
++type slidesTextDocument struct {
++	SchemaVersion             int              `json:"schemaVersion"`
++	PresentationID            string           `json:"presentationId"`
++	Title                     string           `json:"title"`
++	RevisionID                string           `json:"revisionId"`
++	SlideCount                int              `json:"slideCount"`
++	Slides                    []slidesTextPage `json:"slides"`
++	TextBytes                 int              `json:"textBytes"`
++	RevisionAndOrderRechecked bool             `json:"revisionAndOrderRechecked"`
++	SlideOrderRechecked       bool             `json:"slideOrderRechecked"`
++	PartialText               bool             `json:"partialText"`
++	Limitations               []string         `json:"limitations"`
++}
++
++// Request only textual fields. At the depth boundary request child IDs so an
++// additional group level is detected and rejected, never silently omitted.
++func slidesTextFields(depth int) string {
++	text := "text(textElements(textRun(content),autoText(content)))"
++	elements := "objectId,shape(placeholder(type)," + text + "),wordArt(renderedText),table(tableRows(tableCells(" + text + ")))"
++	if depth == 0 {
++		return elements + ",elementGroup(children(objectId))"
++	}
++	return elements + ",elementGroup(children(" + slidesTextFields(depth-1) + "))"
++}
++
++func slidesTextPresentationFields() api.Field {
++	elements := slidesTextFields(slidesTextMaxDepth)
++	return api.Field("presentationId,title,revisionId,slides(objectId,pageElements(" + elements +
++		"),slideProperties(notesPage(pageElements(" + elements + "))))")
++}
++
++func slidesTextReadError(err error) error {
++	var remote *api.Error
++	if errors.As(err, &remote) {
++		for _, detail := range remote.Errors {
++			switch detail.Reason {
++			case "rateLimitExceeded", "userRateLimitExceeded":
++				return errors.New("slides_text_rate_limited")
++			case "dailyLimitExceeded", "quotaExceeded", "storageQuotaExceeded":
++				return errors.New("slides_text_quota_exceeded")
++			}
++		}
++		switch remote.Code {
++		case 401:
++			return errors.New("slides_text_auth_required")
++		case 403:
++			return errors.New("slides_text_access_denied")
++		case 404:
++			return errors.New("slides_text_not_found")
++		case 429:
++			return errors.New("slides_text_rate_limited")
++		}
++	}
++	// Do not echo response bodies, URLs, auth diagnostics or provider payloads.
++	return errors.New("slides_text_read_failed")
++}
++
++func slidesTextInventory(p *slides.Presentation, id string) ([]string, error) {
++	if p == nil || p.PresentationId != id {
++		return nil, errors.New("slides_text_identity_or_revision_missing")
++	}
++	if len(p.Slides) > slidesTextMaxSlides {
++		return nil, errors.New("slides_text_slide_budget_exceeded")
++	}
++	ids := make([]string, 0, len(p.Slides))
++	seen := make(map[string]bool)
++	for _, page := range p.Slides {
++		if page == nil || !slidesTextObjectID.MatchString(page.ObjectId) || seen[page.ObjectId] {
++			return nil, errors.New("slides_text_inventory_invalid")
++		}
++		seen[page.ObjectId] = true
++		ids = append(ids, page.ObjectId)
++	}
++	return ids, nil
++}
++
++type slidesTextCollector struct {
++	bytes int
++	nodes int
++	limit int
++}
++
++func (c *slidesTextCollector) text(content *slides.TextContent) (string, error) {
++	var result strings.Builder
++	if content != nil {
++		for _, element := range content.TextElements {
++			if err := c.countNode(); err != nil {
++				return "", err
++			}
++			if element == nil {
++				return "", errors.New("slides_text_response_invalid")
++			}
++			var value string
++			if element.TextRun != nil {
++				value = element.TextRun.Content
++			} else if element.AutoText != nil {
++				value = element.AutoText.Content
++			}
++			if len(value) > c.limit-c.bytes {
++				return "", errors.New("slides_text_byte_budget_exceeded")
++			}
++			c.bytes += len(value)
++			result.WriteString(value)
++		}
++	}
++	return result.String(), nil
++}
++
++func (c *slidesTextCollector) countNode() error {
++	c.nodes++
++	if c.nodes > slidesTextMaxNodes {
++		return errors.New("slides_text_node_budget_exceeded")
++	}
++	return nil
++}
++
++// Cell indices are API row/cell-array positions, not inferred visual geometry.
++// Keep individual records and the ordered group path; do not flatten table order
++// into a claim about the presentation's rendered reading order.
++func (c *slidesTextCollector) elements(elements []*slides.PageElement, groups []string) ([]slidesTextRecord, error) {
++	result := make([]slidesTextRecord, 0)
++	for _, element := range elements {
++		if err := c.countNode(); err != nil {
++			return nil, err
++		}
++		if element == nil || !slidesTextObjectID.MatchString(element.ObjectId) {
++			return nil, errors.New("slides_text_response_invalid")
++		}
++		path := append([]string{}, groups...)
++		if element.Shape != nil {
++			text, err := c.text(element.Shape.Text)
++			if err != nil {
++				return nil, err
++			}
++			if text != "" {
++				record := slidesTextRecord{ObjectID: element.ObjectId, Kind: "shape", GroupPath: path, Text: text}
++				if element.Shape.Placeholder != nil {
++					record.PlaceholderType = element.Shape.Placeholder.Type
++				}
++				result = append(result, record)
++			}
++		}
++		if element.Table != nil {
++			for ri, row := range element.Table.TableRows {
++				if err := c.countNode(); err != nil {
++					return nil, err
++				}
++				if row == nil {
++					return nil, errors.New("slides_text_response_invalid")
++				}
++				for ci, cell := range row.TableCells {
++					if err := c.countNode(); err != nil {
++						return nil, err
++					}
++					if cell == nil {
++						return nil, errors.New("slides_text_response_invalid")
++					}
++					text, err := c.text(cell.Text)
++					if err != nil {
++						return nil, err
++					}
++					// Preserve empty cells too: their positions are structural.
++					result = append(result, slidesTextRecord{ObjectID: element.ObjectId, Kind: "table_cell", GroupPath: path, RowIndex: &ri, CellIndex: &ci, Text: text})
++				}
++			}
++		}
++		if element.WordArt != nil && element.WordArt.RenderedText != "" {
++			text := element.WordArt.RenderedText
++			if len(text) > c.limit-c.bytes {
++				return nil, errors.New("slides_text_byte_budget_exceeded")
++			}
++			c.bytes += len(text)
++			result = append(result, slidesTextRecord{ObjectID: element.ObjectId, Kind: "word_art", GroupPath: path, Text: text})
++		}
++		if element.ElementGroup != nil && len(element.ElementGroup.Children) > 0 {
++			if len(groups) >= slidesTextMaxDepth {
++				return nil, errors.New("slides_text_group_depth_exceeded")
++			}
++			children, err := c.elements(element.ElementGroup.Children, append(path, element.ObjectId))
++			if err != nil {
++				return nil, err
++			}
++			result = append(result, children...)
++		}
++	}
++	return result, nil
++}
++
++func (c *SlidesReadPresentationTextCmd) Run(ctx context.Context, flags *RootFlags) error {
++	id := strings.TrimSpace(c.PresentationID)
++	if !slidesTextID.MatchString(id) {
++		return usage("invalid presentationId")
++	}
++	if c.MaxBytes < 1024 || c.MaxBytes > slidesTextMaxBytes {
++		return usage("max-bytes must be between 1024 and 33554432")
++	}
++	if !outfmt.IsJSON(ctx) {
++		return usage("read-presentation-text requires --json")
++	}
++	account, err := requireAccount(flags)
++	if err != nil {
++		return err
++	}
++	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
++	defer cancel()
++	// Same factory and OAuth/refresh/keyring lifecycle as read-slide. No new
++	// scopes, auth flow, token cache, credential export or second client.
++	svc, err := newSlidesService(ctx, account)
++	if err != nil || svc == nil {
++		return errors.New("slides_text_auth_unavailable")
++	}
++	presentation, err := svc.Presentations.Get(id).Fields(slidesTextPresentationFields()).Context(ctx).Do()
++	if err != nil {
++		return slidesTextReadError(err)
++	}
++	ids, err := slidesTextInventory(presentation, id)
++	if err != nil {
++		return err
++	}
++	collector := slidesTextCollector{limit: c.MaxBytes, bytes: len(presentation.Title)}
++	if collector.bytes > collector.limit {
++		return errors.New("slides_text_byte_budget_exceeded")
++	}
++	document := slidesTextDocument{SchemaVersion: 1, PresentationID: id, Title: presentation.Title, RevisionID: presentation.RevisionId,
++		SlideCount: len(ids), Slides: make([]slidesTextPage, 0, len(ids)), PartialText: true,
++		Limitations: []string{"images_and_ocr_not_extracted", "charts_and_embedded_media_not_extracted", "layouts_masters_and_notes_master_not_extracted",
++			"rendered_reading_order_and_table_geometry_not_verified", "text_style_and_hyperlink_targets_not_extracted", "source_text_requires_consumer_sanitization"}}
++	for i, page := range presentation.Slides {
++		text, err := collector.elements(page.PageElements, nil)
++		if err != nil {
++			return err
++		}
++		notes := make([]slidesTextRecord, 0)
++		if page.SlideProperties != nil && page.SlideProperties.NotesPage != nil {
++			notes, err = collector.elements(page.SlideProperties.NotesPage.PageElements, nil)
++			if err != nil {
++				return err
++			}
++		}
++		document.Slides = append(document.Slides, slidesTextPage{ObjectID: page.ObjectId, Number: i + 1, Elements: text, Notes: notes})
++	}
++	final, err := svc.Presentations.Get(id).Fields("presentationId,revisionId,slides(objectId)").Context(ctx).Do()
++	if err != nil {
++		return slidesTextReadError(err)
++	}
++	finalIDs, err := slidesTextInventory(final, id)
++	if err != nil {
++		return err
++	}
++	if presentation.RevisionId != final.RevisionId || !slices.Equal(ids, finalIDs) {
++		return errors.New("slides_text_changed_during_read")
++	}
++	document.TextBytes = collector.bytes
++	document.SlideOrderRechecked = true
++	document.RevisionAndOrderRechecked = presentation.RevisionId != ""
++	if presentation.RevisionId == "" {
++		document.Limitations = append(document.Limitations, "revision_id_unavailable")
++	}
++	// Buffer before emitting: a budget or revision failure cannot leave partial
++	// source text on stdout. The SDK's input JSON decode is not streaming-capped.
++	var encoded bytes.Buffer
++	if err := outfmt.WriteJSON(ctx, &encoded, document); err != nil {
++		return errors.New("slides_text_output_failed")
++	}
++	if encoded.Len() > c.MaxBytes {
++		return errors.New("slides_text_byte_budget_exceeded")
++	}
++	_, err = os.Stdout.Write(encoded.Bytes())
++	return err
++}
+diff --git a/internal/cmd/slides_read_presentation_text_test.go b/internal/cmd/slides_read_presentation_text_test.go
+new file mode 100644
+index 0000000..12ec4ff
+--- /dev/null
++++ b/internal/cmd/slides_read_presentation_text_test.go
+@@ -0,0 +1,306 @@
++package cmd
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++	"strings"
++	"testing"
++
++	"google.golang.org/api/option"
++	"google.golang.org/api/slides/v1"
++
++	"github.com/steipete/gogcli/internal/outfmt"
++)
++
++type slidesTextRoundTripper func(*http.Request) (*http.Response, error)
++
++func (f slidesTextRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
++
++// All requests stay in memory. Replacing the entire service factory and using
++// an explicit account avoids the real OAuth, ADC, keyring and HTTP paths.
++func slidesTextMock(t *testing.T, bodies []string, status int) *int {
++	t.Helper()
++	calls, factories := 0, 0
++	client := &http.Client{Transport: slidesTextRoundTripper(func(r *http.Request) (*http.Response, error) {
++		if r.Method != http.MethodGet || r.URL.Host != "slides.googleapis.com" || r.URL.Path != "/v1/presentations/pres1" {
++			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
++		}
++		if r.Header.Get("Authorization") != "" {
++			t.Fatal("unexpected authorization header")
++		}
++		if _, ok := r.Context().Deadline(); !ok {
++			t.Fatal("missing read deadline")
++		}
++		fields := r.URL.Query().Get("fields")
++		if calls == 0 {
++			if fields != string(slidesTextPresentationFields()) {
++				t.Fatalf("unexpected textual fields: %s", fields)
++			}
++			for _, forbidden := range []string{"image", "contentUrl", "thumbnail", "sheetsChart", "layout", "master", "link", "*"} {
++				if strings.Contains(fields, forbidden) {
++					t.Fatalf("unbounded field: %s", forbidden)
++				}
++			}
++		} else if fields != "presentationId,revisionId,slides(objectId)" {
++			t.Fatalf("unexpected final fields: %s", fields)
++		}
++		if calls >= len(bodies) {
++			t.Fatal("too many requests")
++		}
++		body := bodies[calls]
++		calls++
++		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
++	})}
++	svc, err := slides.NewService(context.Background(), option.WithoutAuthentication(), option.WithHTTPClient(client))
++	if err != nil {
++		t.Fatal(err)
++	}
++	orig := newSlidesService
++	newSlidesService = func(_ context.Context, account string) (*slides.Service, error) {
++		factories++
++		if account != "synthetic@example.test" {
++			t.Fatalf("unexpected account: %s", account)
++		}
++		return svc, nil
++	}
++	t.Cleanup(func() {
++		newSlidesService = orig
++		if factories != 1 {
++			t.Errorf("service factory called %d times", factories)
++		}
++	})
++	return &calls
++}
++
++func slidesTextRun(t *testing.T, limit int) (string, error) {
++	t.Helper()
++	var runErr error
++	out := captureStdout(t, func() {
++		ctx := outfmt.WithMode(context.Background(), outfmt.Mode{JSON: true})
++		cmd := SlidesReadPresentationTextCmd{PresentationID: "pres1", MaxBytes: limit}
++		runErr = cmd.Run(ctx, &RootFlags{Account: "synthetic@example.test"})
++	})
++	return out, runErr
++}
++
++const slidesTextFixture = `{"presentationId":"pres1","title":"Synthetic deck","revisionId":"rev_1","slides":[
++ {"objectId":"slide:1","pageElements":[
++  {"objectId":"top_1","shape":{"text":{"textElements":[{"textRun":{"content":"첫 줄\n"}},{"autoText":{"content":"2"}}]}}},
++  {"objectId":"group_1","elementGroup":{"children":[{"objectId":"group_2","elementGroup":{"children":[
++   {"objectId":"group_shape","shape":{"text":{"textElements":[{"textRun":{"content":"Grouped 한글"}}]}}},
++   {"objectId":"table_1","table":{"tableRows":[{"tableCells":[{"text":{"textElements":[{"textRun":{"content":"Cell A\n"}}]}},{"text":{"textElements":[]}}]},{"tableCells":[{"text":{"textElements":[{"textRun":{"content":"Cell B"}}]}}]}]}},
++   {"objectId":"word_art","wordArt":{"renderedText":"장식 제목"}}
++  ]}}]}},
++  {"objectId":"image_1","image":{"contentUrl":"https://private.invalid/DO_NOT_EMIT_IMAGE_METADATA","sourceUrl":"DO_NOT_EMIT_IMAGE_SOURCE"}},
++  {"objectId":"chart_1","sheetsChart":{"contentUrl":"DO_NOT_EMIT_CHART_METADATA"}}
++ ],"slideProperties":{"notesPage":{"pageElements":[
++  {"objectId":"note_body","shape":{"placeholder":{"type":"BODY"},"text":{"textElements":[{"textRun":{"content":"Body note\n"}}]}}},
++  {"objectId":"note_other","shape":{"placeholder":{"type":"SLIDE_NUMBER"},"text":{"textElements":[{"autoText":{"content":"1"}}]}}},
++  {"objectId":"note_group","elementGroup":{"children":[{"objectId":"note_free","shape":{"text":{"textElements":[{"textRun":{"content":"Other note"}}]}}}]}},
++  {"objectId":"note_table","table":{"tableRows":[{"tableCells":[{"text":{"textElements":[{"textRun":{"content":"Note cell"}}]}}]}]}}
++ ]}}},
++ {"objectId":"slide_2","pageElements":[]}
++]}`
++
++const slidesTextFinal = `{"presentationId":"pres1","revisionId":"rev_1","slides":[{"objectId":"slide:1"},{"objectId":"slide_2"}]}`
++
++func TestSlidesReadPresentationTextRecursiveAndNotes(t *testing.T) {
++	calls := slidesTextMock(t, []string{slidesTextFixture, slidesTextFinal}, http.StatusOK)
++	out, err := slidesTextRun(t, slidesTextMaxBytes)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if *calls != 2 {
++		t.Fatalf("requests=%d", *calls)
++	}
++	if strings.Contains(out, "DO_NOT_EMIT") || strings.Contains(out, "private.invalid") {
++		t.Fatal("asset metadata leaked")
++	}
++	var doc slidesTextDocument
++	if err := json.Unmarshal([]byte(out), &doc); err != nil {
++		t.Fatal(err)
++	}
++	if doc.SchemaVersion != 1 || doc.PresentationID != "pres1" || doc.RevisionID != "rev_1" || doc.SlideCount != 2 || !doc.RevisionAndOrderRechecked || !doc.SlideOrderRechecked || !doc.PartialText || len(doc.Limitations) != 6 {
++		t.Fatalf("bad document metadata: %+v", doc)
++	}
++	first := doc.Slides[0]
++	if first.ObjectID != "slide:1" || first.Number != 1 || doc.Slides[1].Number != 2 {
++		t.Fatal("slide order lost")
++	}
++	if len(first.Elements) != 6 || len(first.Notes) != 4 {
++		t.Fatalf("elements=%d notes=%d", len(first.Elements), len(first.Notes))
++	}
++	if first.Elements[0].Text != "첫 줄\n2" || first.Elements[1].Text != "Grouped 한글" || strings.Join(first.Elements[1].GroupPath, "/") != "group_1/group_2" {
++		t.Fatal("shape text or group path lost")
++	}
++	for i, want := range []struct {
++		row, cell int
++		text      string
++	}{{0, 0, "Cell A\n"}, {0, 1, ""}, {1, 0, "Cell B"}} {
++		cell := first.Elements[i+2]
++		if cell.Kind != "table_cell" || cell.RowIndex == nil || *cell.RowIndex != want.row || cell.CellIndex == nil || *cell.CellIndex != want.cell || cell.Text != want.text {
++			t.Fatalf("bad cell: %+v", cell)
++		}
++	}
++	if first.Elements[5].Kind != "word_art" || first.Elements[5].Text != "장식 제목" || strings.Join(first.Elements[5].GroupPath, "/") != "group_1/group_2" {
++		t.Fatal("grouped WordArt text lost")
++	}
++	if first.Notes[1].PlaceholderType != "SLIDE_NUMBER" || first.Notes[1].Text != "1" || first.Notes[2].GroupPath[0] != "note_group" {
++		t.Fatal("non-BODY notes lost")
++	}
++	if first.Notes[3].Kind != "table_cell" || first.Notes[3].Text != "Note cell" {
++		t.Fatal("notes table lost")
++	}
++	if doc.Slides[1].Elements == nil || doc.Slides[1].Notes == nil {
++		t.Fatal("empty arrays must not be null")
++	}
++	count := len(doc.Title)
++	for _, page := range doc.Slides {
++		for _, records := range [][]slidesTextRecord{page.Elements, page.Notes} {
++			for _, record := range records {
++				count += len(record.Text)
++			}
++		}
++	}
++	if doc.TextBytes != count {
++		t.Fatalf("UTF-8 bytes got %d want %d", doc.TextBytes, count)
++	}
++}
++
++func TestSlidesReadPresentationTextRejectsChangedOrInvalidInventory(t *testing.T) {
++	for _, tc := range []struct{ name, first, last, want string }{
++		{"revision", slidesTextFixture, strings.Replace(slidesTextFinal, "rev_1", "rev_2", 1), "slides_text_changed_during_read"},
++		{"order", slidesTextFixture, `{"presentationId":"pres1","revisionId":"rev_1","slides":[{"objectId":"slide_2"},{"objectId":"slide:1"}]}`, "slides_text_changed_during_read"},
++		{"duplicate", slidesTextFixture, strings.Replace(slidesTextFinal, "slide_2", "slide:1", 1), "slides_text_inventory_invalid"},
++		{"revision_appeared", strings.Replace(slidesTextFixture, "rev_1", "", 1), slidesTextFinal, "slides_text_changed_during_read"},
++		{"revision_disappeared", slidesTextFixture, strings.Replace(slidesTextFinal, "rev_1", "", 1), "slides_text_changed_during_read"},
++		{"wrong_identity", strings.Replace(slidesTextFixture, "pres1", "wrong", 1), "", "slides_text_identity_or_revision_missing"},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			slidesTextMock(t, []string{tc.first, tc.last}, http.StatusOK)
++			out, err := slidesTextRun(t, slidesTextMaxBytes)
++			if err == nil || err.Error() != tc.want || out != "" {
++				t.Fatalf("out=%q err=%v", out, err)
++			}
++		})
++	}
++}
++
++func TestSlidesReadPresentationTextViewOnlyRevisionUnavailable(t *testing.T) {
++	slidesTextMock(t, []string{strings.Replace(slidesTextFixture, "rev_1", "", 1), strings.Replace(slidesTextFinal, "rev_1", "", 1)}, http.StatusOK)
++	out, err := slidesTextRun(t, slidesTextMaxBytes)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var doc slidesTextDocument
++	if err := json.Unmarshal([]byte(out), &doc); err != nil {
++		t.Fatal(err)
++	}
++	if doc.RevisionID != "" || doc.RevisionAndOrderRechecked || !doc.SlideOrderRechecked || doc.Limitations[len(doc.Limitations)-1] != "revision_id_unavailable" {
++		t.Fatalf("view-only verification overclaimed: %+v", doc)
++	}
++}
++
++func TestSlidesReadPresentationTextBoundaries(t *testing.T) {
++	t.Run("text_bytes", func(t *testing.T) {
++		body := strings.Replace(slidesTextFixture, "Grouped 한글", strings.Repeat("한", 400), 1)
++		calls := slidesTextMock(t, []string{body}, http.StatusOK)
++		out, err := slidesTextRun(t, 1024)
++		if err == nil || err.Error() != "slides_text_byte_budget_exceeded" || out != "" || *calls != 1 {
++			t.Fatalf("out=%q err=%v calls=%d", out, err, *calls)
++		}
++	})
++	t.Run("json_bytes", func(t *testing.T) {
++		slidesTextMock(t, []string{slidesTextFixture, slidesTextFinal}, http.StatusOK)
++		out, err := slidesTextRun(t, 1024)
++		if err == nil || err.Error() != "slides_text_byte_budget_exceeded" || out != "" {
++			t.Fatalf("out=%q err=%v", out, err)
++		}
++	})
++	t.Run("group_depth", func(t *testing.T) {
++		child := &slides.PageElement{ObjectId: "leaf", Shape: &slides.Shape{Text: &slides.TextContent{TextElements: []*slides.TextElement{{TextRun: &slides.TextRun{Content: "leaf"}}}}}}
++		for range slidesTextMaxDepth {
++			child = &slides.PageElement{ObjectId: "group", ElementGroup: &slides.Group{Children: []*slides.PageElement{child}}}
++		}
++		c := slidesTextCollector{limit: 1024}
++		records, err := c.elements([]*slides.PageElement{child}, nil)
++		if err != nil || len(records) != 1 || len(records[0].GroupPath) != slidesTextMaxDepth {
++			t.Fatalf("max depth: %v", err)
++		}
++		child = &slides.PageElement{ObjectId: "group", ElementGroup: &slides.Group{Children: []*slides.PageElement{child}}}
++		_, err = c.elements([]*slides.PageElement{child}, nil)
++		if err == nil || err.Error() != "slides_text_group_depth_exceeded" {
++			t.Fatalf("overflow: %v", err)
++		}
++	})
++	t.Run("nodes", func(t *testing.T) {
++		c := slidesTextCollector{limit: 1024, nodes: slidesTextMaxNodes}
++		_, err := c.text(&slides.TextContent{TextElements: []*slides.TextElement{{TextRun: &slides.TextRun{Content: ""}}}})
++		if err == nil || err.Error() != "slides_text_node_budget_exceeded" {
++			t.Fatalf("node budget: %v", err)
++		}
++	})
++	t.Run("slides", func(t *testing.T) {
++		_, err := slidesTextInventory(&slides.Presentation{PresentationId: "pres1", RevisionId: "rev", Slides: make([]*slides.Page, slidesTextMaxSlides+1)}, "pres1")
++		if err == nil || err.Error() != "slides_text_slide_budget_exceeded" {
++			t.Fatalf("slide budget: %v", err)
++		}
++	})
++}
++
++func TestSlidesReadPresentationTextSafeErrors(t *testing.T) {
++	for _, tc := range []struct {
++		code int
++		want string
++	}{{401, "slides_text_auth_required"}, {403, "slides_text_access_denied"}, {404, "slides_text_not_found"}, {429, "slides_text_rate_limited"}, {500, "slides_text_read_failed"}} {
++		t.Run(tc.want, func(t *testing.T) {
++			slidesTextMock(t, []string{`{"error":{"message":"DO_NOT_EMIT_PROVIDER_PAYLOAD","code":` + httpStatusNumber(tc.code) + `}}`}, tc.code)
++			out, err := slidesTextRun(t, slidesTextMaxBytes)
++			if err == nil || err.Error() != tc.want || out != "" {
++				t.Fatalf("out=%q err=%v", out, err)
++			}
++		})
++	}
++	if got := slidesTextReadError(errors.New("DO_NOT_EMIT_AUTH_SECRET")).Error(); got != "slides_text_read_failed" {
++		t.Fatal(got)
++	}
++	for _, reason := range []string{"rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded", "quotaExceeded", "storageQuotaExceeded"} {
++		t.Run(reason, func(t *testing.T) {
++			body := `{"error":{"code":403,"message":"DO_NOT_EMIT_PROVIDER_PAYLOAD","errors":[{"reason":"` + reason + `"}]}}`
++			slidesTextMock(t, []string{body}, http.StatusForbidden)
++			out, err := slidesTextRun(t, slidesTextMaxBytes)
++			want := "slides_text_quota_exceeded"
++			if reason == "rateLimitExceeded" || reason == "userRateLimitExceeded" {
++				want = "slides_text_rate_limited"
++			}
++			if err == nil || err.Error() != want || out != "" {
++				t.Fatalf("out=%q err=%v", out, err)
++			}
++		})
++	}
++}
++
++func httpStatusNumber(code int) string { b, _ := json.Marshal(code); return string(b) }
++
++func TestSlidesReadPresentationTextRejectsArgumentsBeforeAuth(t *testing.T) {
++	orig := newSlidesService
++	newSlidesService = func(context.Context, string) (*slides.Service, error) {
++		t.Fatal("unexpected auth factory")
++		return nil, nil
++	}
++	t.Cleanup(func() { newSlidesService = orig })
++	for _, tc := range []struct {
++		id    string
++		bytes int
++		json  bool
++	}{{"bad/id", 1024, true}, {"pres1", 1023, true}, {"pres1", slidesTextMaxBytes + 1, true}, {"pres1", 1024, false}} {
++		ctx := outfmt.WithMode(context.Background(), outfmt.Mode{JSON: tc.json})
++		cmd := SlidesReadPresentationTextCmd{PresentationID: tc.id, MaxBytes: tc.bytes}
++		if err := cmd.Run(ctx, &RootFlags{Account: "synthetic@example.test"}); err == nil {
++			t.Fatal("expected validation error")
++		}
++	}
++}

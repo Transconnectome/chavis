@@ -1,3 +1,63 @@
+# Chavis 인수인계
+
+갱신: 2026-09-14. 현재 작업은 차지욱 교수 철학 에이전트다. 저장소 `/home/juke/git/chavis`, 브랜치 `main`, push 대상 `origin/main` (`Transconnectome/chavis`, 공개 저장소). 아래 Codex Coach 인계는 이전 작업의 역사적 기록으로 보존한다.
+
+## 차교수 철학 에이전트: 지금 시작할 곳
+
+1. [공개 구현 보고서](docs/cha_philosophy/RESEARCH_REPORT.md), [실행 README](tools/cha_philosophy/README.md), [미적용 수정안](tools/cha_philosophy/pending/README.md)을 읽는다.
+2. `cha-philosophy status` 및 `systemctl --user show cha-philosophy-refresh.service cha-philosophy-refresh.timer -p Id -p LoadState -p ActiveState -p SubState -p MainPID -p ExecMainStatus`로 현재 상태를 다시 확인한다. 비공개 JSON 전체를 공개 로그로 복사하지 않는다.
+3. 운영 버전과 미적용 패치를 혼동하지 않는다. 운영 코드는 전체 검사 824개 통과 상태다. Gmail 스레드 문맥 수정안은 별도 사본에서 883개 통과했고 아래 이관 준비도 별도 사본에서만 수행했다.
+4. 새로운 코드 확장보다, 검토 manifest와 현재 원문·원칙을 대조하고 코드와 검토 revision을 함께 반영하는 작업을 먼저 끝낸다. 그 뒤 실제 TLS handshake timeout의 좁은 재시도, Drive 남은 수집·내용 gap, Teams 인증을 처리한다.
+
+## 완료한 작업과 산출물
+
+- `tools/cha_philosophy/`: 비공개 원문·귀속·해석 등록부, 읽기 전용 수집·재개, 후보 추출·근거 감사, 과제 원본 보존·구간 계획·통합 선언 검사, CLI와 설치기.
+- `skills/cha-philosophy/`, `agents/cha-philosophy.md`: 현재 요청과 근거에 맞는 글쓰기·평가·리뷰 적용. 세 클라이언트에 설치한 링크와 기존 스킬 연결은 로컬 환경에 별도로 존재한다.
+- `docs/cha_philosophy/research_memory.md`, `research_connectors.md`, `research_evaluation.md`: 공개 1차 문헌·공식 API의 세 병렬 심층 조사. `EVALUATION_PROTOCOL.md`는 구조·의미 검증과 실제 비교의 경계를 정의한다.
+- `tools/cha_philosophy/pending/thread-context.patch`: 운영 버전에 추가할 21개 파일의 코드·합성 검사·설명 수정. 인계에서 독립 사본에 적용하여 883개 검사를 통과한 Python snapshot과 모든 해시가 일치함을 확인했다. 운영 적용은 하지 않았다.
+
+확인한 원칙은 검토자의 해석 18개, 후보 4개, 교수 명시 확인 0개다. 활성 인용은 56개다. 교수 계정에서 보냈다는 사실을 독자 집필·문장별 AI 기여·과학적 진실·교수의 에이전트 승인으로 바꾸지 않는다. 현재 rubric과 객관적 근거가 개인 선호보다 우선한다.
+
+## 운영 상태와 남은 문제
+
+2026-09-14 09:28 KST readback에서 timer는 active/waiting, 마지막 bounded cycle은 09:08:34 KST 종료 코드 0이었다. 이는 모든 플랫폼 성공이나 전체 corpus 완료가 아니다.
+
+- Gmail: 현재 설정 query의 첫 전체 열거는 2026-09-13 08:52:17 KST에 6,337스레드·64페이지로 완료됐다. 이후 overlap 주기의 작은 숫자를 전체 수로 해석하지 않는다. 과거 관계 기간·별칭·그룹·의미 검토 전체 범위는 미완이다.
+- Drive: 현재 query는 2,376파일·24페이지 처리, 현재 페이지 대기 28개·다음 페이지 있음·내용 gap 274개다. 전일 일회성 작업은 2,146파일에서 TLS handshake timeout으로 오류 종료했으나 다음 timer들이 checkpoint를 이어갔다. 전체 잔여 수를 현재 페이지 대기 수로 대체하지 않는다. 수거된 transient unit의 `LoadState=not-found`에서 보이는 기본 성공 값은 종료 증거가 아니다.
+- Teams: native 수집의 active 메시지 5,323개와 별도 아카이브 1,469개는 전체 발견이나 최신 권한의 증명이 아니다. 연결 재인증과 전용 Entra public-client ID·로그인·silent 갱신의 실제 검증이 남았다.
+- Ollama: 시스템 `ollama.service` inactive/dead, MainPID 0. 재시작에 관한 사용자 응답은 아직 없다. 대체 GPU 서비스나 외부 모델로 우회하지 않는다. 검색·bundle·prepare·감사는 기존 자료로 가능하다.
+- 효과: 실제 과거 업무 세 사례의 제한된 대조는 여섯 판정 중 동률 5·기본 조건 선호 1·개인화 선호 0이었다. 원고 리뷰·실제 채점·시간 절감·교수의 새 독립 판단 일치는 미측정이다.
+
+Gmail 전체 스레드 22개·171개 메시지에 대해 후속 정정·조건·인용 경계를 별도로 의미 검토했다. 이 근거를 사용하는 활성 원칙은 17개이며, Drive만 근거인 나머지 1개는 기존 검토를 유지한다. 현재 문장·예외를 유지할 수 있다는 검토 결과와 원격 재조회 후 별도 DB 검증을 보존했다. 이것을 운영 반영 완료나 교수 확인으로 표시하지 않는다.
+
+## 다음 이관을 위한 비공개 위치
+
+원문·개인 식별자·개별 사례 세부는 Git에 포함하지 않는다.
+
+- 운영 저장소: `/home/juke/.local/share/cha-philosophy/evidence.sqlite3`; 설정은 같은 디렉터리의 `config.json`, 최신 주기 결과는 `refresh_status.json`.
+- 스레드 수정 작업 사본: `/home/juke/.local/share/cha-philosophy/thread-context-stage-20260913/`.
+- 같은 사본의 `reviewed_thread_migration_plan_20260913.json`: 실제 원격 재조회, 22개 검토 family manifest, 17개 검토된 원칙의 revision 연결, 76개 자료의 좁은 편집 링크 가림 계획. 운영 변경 0인 별도 사본 검증 결과다.
+- 같은 사본의 `reviewed-thread-final-canary/evidence.sqlite3`, `small_family_semantic_review.json`, `middle_family_semantic_review.json`, `large_family_semantic_review.json`: 검토 결과와 원문 대응. 직접 읽기 허용 범위 안에서만 사용하고 새 모델·외부 서비스로 보내지 않는다.
+- 같은 사본의 `prepare_reviewed_migration.py`: 당시 준비 과정의 로컬 스크립트. 기존 결과를 덮어쓰지 않도록 되어 있으며 운영 적용 스크립트가 아니다. 무작정 재실행하지 말고 현재 source hash·membership·원칙·제외 상태를 다시 비교한다.
+- 이관 전 자료를 다시 읽어 명시적 revision review를 준비한다. 자동 context binding을 실제 읽기 표시로 대체하지 않는다. 순수 로컬 가림으로 `verified_at`을 갱신하지 말고, 원격 확인 시각·재개 위치·무관한 자료를 보존한다.
+- 이번 인계 백업: `/home/juke/.local/share/cha-philosophy/handoff-push-20260914/`. 기존 상세 `RESEARCH_REPORT.md`·`PLAN.md`, 이전 `HANDOFF.md`, 운영 readback, 패치 재구성 검증을 보존했다. 현재 공개 보고서는 개인 사례를 제외한 요약이다.
+
+추가 TLS handshake timeout 처리는 검토 요청 뒤 실행이 중단되어 코드에 반영되지 않았다. 위 패치의 883개 검사 결과를 이 미구현 처리의 검증으로 인용하지 않는다. 오래된 검토 snapshot의 freshness가 계속 유효하다고 가정하지 않는다.
+
+## 검사·Git 경계
+
+이번 인계에서 운영 버전의 `python3 -m pytest -q tools/cha_philosophy/tests`가 **824 passed (49.15s)**였다. anyio 플러그인 재작성 경고 1개가 있었고 실패는 없었다. 패치 적용 사본은 이전 **883 passed (60.61s)** 결과와 모든 Python 해시가 일치했다. 실제 네트워크·추론·의미 정확도·미래 성능을 이 검사 수로 입증하지 않는다. 기존 유료 sycophancy 벤치마크는 변경 범위 밖이라 실행하지 않았다.
+
+인계 시작 시 `git fetch origin` 뒤 `HEAD...origin/main`은 0/0, staged 변경은 없었다. 이번 커밋은 이 HANDOFF와 철학 에이전트 경로에 한정한다. 기존 루트 `README.md`, `tests/test_notion_sync.py`, `tools/codex_coach/`의 변경, `tools/audio_powerlaw/`, `tools/local_explore/`, `skills/explore/`, 나머지 `docs/`, 대시보드 PNG는 제외한다. 기존 작업을 정리·삭제·일괄 stage하지 않는다.
+
+이 요청은 인계·커밋·해당 브랜치 push를 승인한다. 배포·모델 재시작·원격 문서 게시·비공개 원자료 공개는 추가하지 않는다. Git은 비공개 DB·원문·평가 산출물·모델·인증·설치된 서비스 및 로컬 이관 계획을 백업하지 않는다. 이번 커밋의 SHA와 실제 원격 검증은 완료 응답에서 보고한다.
+
+---
+
+## 이전 작업 기록 — Codex Coach, 2026-09-12
+
+아래 내용의 “이번 인계”와 날짜별 운영 상태는 이전 Codex Coach 작업 당시 기록이다. 현재 철학 에이전트 인계 상태는 위 내용을 따른다.
+
 # Codex Coach 인수인계
 
 갱신: 2026-09-12. 대상 저장소 `/home/juke/git/chavis`, 브랜치 `main`, 원격 `origin/main` (`Transconnectome/chavis`, 공개 저장소).
