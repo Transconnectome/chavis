@@ -69,6 +69,13 @@ def installation_files(home: Path, config_path: Path | None = None) -> dict[Path
         "[Service]\nType=oneshot\n"
         f"ExecStart=/usr/bin/python3 {systemd_quote(str(runner))} --config {systemd_quote(str(config))} tick\n"
         f"Environment={systemd_quote('PATH=' + executable_path)}\n"
+        # 재부팅·로그아웃으로 user manager 환경이 비어도 자격증명이 살아남게 한다.
+        # 선행 `-`는 필수 — 파일이 없어도 unit이 기동해야 한다. 없으면 서비스가
+        # 아예 시작하지 않아 health 경고마저 사라지고 지금보다 나빠진다.
+        # systemd 지정자 %h(사용자 홈)를 쓴다. systemd_quote()로 감싸면
+        # EnvironmentFile= 파서가 따옴표를 경로의 일부로 읽어 "not absolute"로
+        # 무시해 버린다(Environment= 와 파싱 규칙이 다르다).
+        "EnvironmentFile=-%h/.config/google-tasks-agent/environment\n"
         "TimeoutStartSec=240\nUMask=0077\n"
     )
     timer = (
