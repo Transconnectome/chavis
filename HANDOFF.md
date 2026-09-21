@@ -28,7 +28,6 @@
 ## 결정 대기 — 비서 확장
 
 - 날짜 없이 등록한 작업의 처리. 지금은 날짜를 지어내지 않는다(`capture_default_due: none`): 스킬이 마감을 한 번 묻고, 답이 없으면 7일 동안 🆕 구간에 보이다가 백로그로 내려간다. `this-week`로 바꾸면 이틀 이상 남은 가장 가까운 금요일이 들어가지만, 그 날짜는 Google Tasks에서 진짜 마감과 구분되지 않는다.
-- origin/main으로 push할지.
 
 ## 함정 — 비서 확장
 
@@ -41,9 +40,9 @@
 
 ## 인벤토리 — 비서 확장
 
-- 코드: `tools/google_tasks_agent/` 아래 `tiers.py`(기한·구간) · `sources.py`(캘린더·메일·인증 나이) · `brief.py`(브리핑·마감 점검) · `secretary.py`(캡처 CLI), 그리고 `agent.py`의 `compose()` · `open_slot()` · nudge 분기
-- 테스트: 같은 디렉터리의 `test_tiers.py` · `test_brief.py` · `test_secretary.py` (합성 데이터만 사용)
-- 스킬: `skills/secretary/SKILL.md` → `~/.claude/skills/secretary` 심볼릭 링크
+- 코드: `tools/google_tasks_agent/` 아래 `tiers.py`(기한·구간) · `sources.py`(캘린더·메일·인증 나이) · `brief.py`(브리핑·마감 점검) · `secretary.py`(캡처 CLI) · `scheduler.py`(캘린더 슬롯 탐색 및 듀얼 등록), 그리고 `agent.py`의 `compose()` · `open_slot()` · nudge 분기
+- 테스트: 같은 디렉터리의 `test_tiers.py` · `test_brief.py` · `test_secretary.py` · `test_scheduler.py` (오프라인 합성 데이터 검증, 95개 테스트 전체 통과)
+- 스킬: `skills/secretary/SKILL.md` → `~/.agents/skills/secretary/`, `~/.openclaw/workspace/skills/secretary/` 배포 완료
 - 저장소 밖: 래퍼 `/home/juke/bin/chavis-secretary`, 운영 config와 그 백업
 - 문서: `tools/google_tasks_agent/README.md`의 "비서 확장" 절이 config 키 · CLI · 한계의 정본이다
 
