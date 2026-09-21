@@ -6,12 +6,14 @@ import argparse
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 import fcntl
+import functools
 import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import time
 from zoneinfo import ZoneInfo
 
@@ -25,7 +27,19 @@ DEFAULTS = {
     'state_dir': str(Path.home() / '.local/state/google-tasks-agent'),
     'timezone': 'Asia/Seoul', 'digest_times': ['08:30', '17:30'],
     'quiet_start': '22:00', 'quiet_end': '08:00', 'upcoming_days': 3,
+    # Secretary extensions, all opt-in from the private config. `brief` swaps the digest body for the
+    # tiered brief and is the first rollback lever; side sources need calendar and mail scopes that a
+    # Tasks-only installation does not have.
+    'brief': False, 'nudge_times': [], 'nudge_window_minutes': 20, 'nudge_overdue_days': 3,
+    'stale_days': 14, 'new_undated_days': 3,
+    'calendar': False, 'mail': False, 'calendar_exclude': [], 'oauth_ttl_days': 0,
+    # Capture: list title for new tasks (empty = the account's first list) and the date given to a
+    # task captured without one: 'none', 'today', 'tomorrow' or 'this-week' (Friday).
+    'capture_list': '', 'capture_default_due': 'this-week',
 }
+# Seconds of a tick that may pass before side sources are skipped. systemd kills the unit at 240s and
+# the Tasks scan plus one Telegram send can already take 235s, so side reads only run on a fast tick.
+SIDE_BUDGET = 120
 
 
 class AgentError(Exception):
@@ -35,11 +49,16 @@ class AgentError(Exception):
 def config(path=DEFAULT_CONFIG):
     result = DEFAULTS | (json.loads(Path(path).read_text()) if Path(path).exists() else {})
     ZoneInfo(result['timezone'])
-    for value in [*result['digest_times'], result['quiet_start'], result['quiet_end']]:
+    for value in [*result['digest_times'], *result['nudge_times'], result['quiet_start'], result['quiet_end']]:
         datetime.strptime(value, '%H:%M')
         if len(value) != 5:
             raise ValueError('time_requires_HH_MM')
     if not result['account'] or not 0 <= result['upcoming_days'] <= 30:
+        raise ValueError('invalid_configuration')
+    if not (1 <= result['nudge_window_minutes'] <= 120 and 1 <= result['stale_days'] <= 365
+            and 0 <= result['nudge_overdue_days'] <= result['stale_days']
+            and 0 <= result['new_undated_days'] <= 30 and 0 <= result['oauth_ttl_days'] <= 365
+            and result['capture_default_due'] in ('none', 'today', 'tomorrow', 'this-week')):
         raise ValueError('invalid_configuration')
     return result
 
@@ -48,10 +67,10 @@ def stamp(now):
     return now.isoformat(timespec='seconds')
 
 
-def gog_json(cfg, args):
+def gog_json(cfg, args, timeout=40):
     try:
         p = subprocess.run([cfg['gog_path'], '--account', cfg['account'], '--json',
-                            '--no-input', *args], capture_output=True, text=True, timeout=40)
+                            '--no-input', *args], capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise AgentError('google_timeout') from None
     except OSError:
@@ -246,6 +265,50 @@ def summary(tasks, cfg, now, heading='할 일 리마인드'):
     return '\n'.join(lines)
 
 
+def compose(tasks, cfg, now, kind='digest', read=None, spare=SIDE_BUDGET):
+    """(text, members, error): the integrated brief, or the legacy summary when it cannot be built.
+
+    A broken or missing secretary module must never stop the reminder, so every failure
+    degrades to the legacy digest and is surfaced through `status` instead of raising.
+    `spare` is what is left of SIDE_BUDGET; without it the brief is built from tasks alone.
+    """
+    if not cfg['brief'] and kind != 'nudge':
+        return summary(tasks, cfg, now), displayed_members(tasks, cfg, now), None
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import brief
+        import sources
+        context = sources.gather(cfg, now, read or functools.partial(gog_json, timeout=15), skip=spare < 45)
+        if kind == 'nudge':
+            return (*brief.nudge(tasks, cfg, now, events=context['events'], issued=context['issued']), None)
+        return (*brief.render(tasks, cfg, now, **context), None)
+    except Exception as exc:
+        error = type(exc).__name__
+        if kind == 'nudge':
+            return '', {}, error
+        body = summary(tasks, cfg, now) + f'\n(통합 브리핑을 만들지 못해 기본 요약으로 대체했습니다: {error})'
+        return body, displayed_members(tasks, cfg, now), error
+
+
+def open_slot(times, now, window_minutes):
+    """Latest slot that opened within the window. A nudge missed by downtime is dropped, not replayed."""
+    current = now.hour * 60 + now.minute
+    for value in sorted(times, reverse=True):
+        start = int(value[:2]) * 60 + int(value[3:])
+        if start <= current < start + window_minutes:
+            return value
+    return None
+
+
+def sent_recently(db, kinds, now, minutes):
+    floor = stamp(now - timedelta(minutes=minutes))
+    marks = ','.join('?' * len(kinds))
+    return db.execute(f"SELECT 1 FROM deliveries WHERE kind IN ({marks}) AND status != 'failed' AND created >= ?",
+                      (*kinds, floor)).fetchone() is not None
+
+
 def consume_changes(db, members):
     db.executemany('DELETE FROM changes WHERE key=? AND fingerprint=?', list(members.items()))
 
@@ -312,7 +375,8 @@ def deliver(db, cfg, key, kind, message, now, sender=send_telegram, members=None
     return 'sent'
 
 
-def tick(db, cfg, now, fetch=fetch_tasks, sender=send_telegram, force=False):
+def tick(db, cfg, now, fetch=fetch_tasks, sender=send_telegram, force=False, read=None):
+    began = time.monotonic()
     with db:
         put_meta(db, 'last_attempt', stamp(now))
         # These records can only be remnants of a terminated prior run (outer flock).
@@ -349,9 +413,24 @@ def tick(db, cfg, now, fetch=fetch_tasks, sender=send_telegram, force=False):
     if key:
         previous = db.execute('SELECT status FROM deliveries WHERE key=?', (key,)).fetchone()
         if not previous or previous['status'] == 'failed':
-            result = deliver(db, cfg, key, kind, summary(tasks, cfg, now), now, sender, displayed_members(tasks, cfg, now))
-            outcomes[kind] = result
+            body, members, error = compose(tasks, cfg, now, read=read, spare=SIDE_BUDGET - (time.monotonic() - began))
+            with db:
+                put_meta(db, 'brief_error', error)
+            outcomes[kind] = deliver(db, cfg, key, kind, body, now, sender, members)
             return {'status': 'ok', 'tasks': len(tasks), 'delivery': outcomes}
+    slot = None if force else open_slot(cfg['nudge_times'], now, cfg['nudge_window_minutes'])
+    if slot and not sent_recently(db, ('digest', 'manual'), now, 45):
+        nudge_key = f'nudge:{day}:{slot}'
+        previous = db.execute('SELECT status FROM deliveries WHERE key=?', (nudge_key,)).fetchone()
+        if not previous or previous['status'] == 'failed':
+            body, members, error = compose(tasks, cfg, now, 'nudge', read=read,
+                                           spare=SIDE_BUDGET - (time.monotonic() - began))
+            if error:
+                with db:
+                    put_meta(db, 'brief_error', error)
+            if body:
+                outcomes['nudge'] = deliver(db, cfg, nudge_key, 'nudge', body, now, sender, members)
+                return {'status': 'ok', 'tasks': len(tasks), 'delivery': outcomes}
     pending = [tasks[row['key']] for row in db.execute('SELECT key FROM changes') if row['key'] in tasks]
     if pending:
         # One attempt per hour, including ambiguous delivery. Fresh snapshot cancels completed tasks.
@@ -382,7 +461,8 @@ def status(db, now):
             'snapshot_age_seconds': age, 'list_count': get_meta(db, 'list_count'),
             'incomplete_tasks': db.execute('SELECT COUNT(*) FROM tasks').fetchone()[0],
             'consecutive_failures': get_meta(db, 'consecutive_failures', 0),
-            'last_error': get_meta(db, 'last_error'), 'deliveries': recent}
+            'last_error': get_meta(db, 'last_error'), 'brief_error': get_meta(db, 'brief_error'),
+            'deliveries': recent}
 
 
 def main():
@@ -396,7 +476,7 @@ def main():
         now = datetime.now(ZoneInfo(cfg['timezone']))
         if args.command == 'preview':
             tasks, _ = fetch_tasks(cfg)
-            print(summary(tasks, cfg, now))
+            print(compose(tasks, cfg, now)[0])
             return 0
         with locked(cfg['state_dir']):
             db = connect(cfg['state_dir'])

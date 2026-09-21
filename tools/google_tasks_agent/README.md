@@ -27,6 +27,64 @@ API로 읽거나 쓸 수 없으므로 Google 앱에 설정한 정확한 시각 �
 자세한 범위는 [Task 리소스의 due 설명](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks)과
 [작업 조회 옵션](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list)을 참고한다.
 
+## 비서 확장 (2026-09-21): 캡처 · 통합 브리핑 · 마감 점검
+
+기본 리마인더 위에 세 가지를 얹었다. 전부 비공개 config에서 켜는 opt-in이며, 끄면 위 표의 동작 그대로다.
+
+| 구성 | 파일 | 역할 |
+|---|---|---|
+| 기한·구간 | `tiers.py` | 제목의 `9/25까지`·`(~9/25)` 표기를 기한으로 읽고, 작업을 경과(14일 이내)·오늘·이번 주·이후·오래된 경과·날짜 없음으로 나눈다. 순수 함수 |
+| 보조 출처 | `sources.py` | `gog`로 캘린더(7일), 중요·미확인 메일, 인증 발급 시각을 읽는다. 실패하면 `None`을 돌려주고 리마인더는 계속 간다 |
+| 브리핑 | `brief.py` | "▶ 지금" 한 줄, 오늘 남은 일정, 🔴 경과 · 🟠 오늘 · 🟡 이번 주 · 🆕 날짜 미정, 저녁에는 내일 일정, 마감 언급 메일. UTF-16 4096 단위를 넘으면 선택 구간부터 버린다 |
+| 캡처 CLI | `secretary.py` | `add` · `done` · `due` · `find` · `brief` · `lists`. Google Tasks에 쓰는 유일한 경로이며 삭제는 구현하지 않았다 |
+
+`agent.py` 자체는 계속 읽기 전용이다. 달라진 것은 요약 본문을 `compose()`로 만든다는 점과 마감 점검(nudge) 슬롯뿐이다.
+
+### config 키 (기본값은 모두 꺼짐)
+
+| 키 | 기본 | 뜻 |
+|---|---|---|
+| `brief` | `false` | 정기 요약 본문을 통합 브리핑으로 바꾼다. **첫 번째 롤백 레버**: `false`로 돌리면 다음 요약부터 예전 형식이다 |
+| `nudge_times` | `[]` | 마감 점검 시각(`HH:MM`). 오늘 기한이거나 최근 `nudge_overdue_days`(3)일 안에 기한이 지난 미완료 작업이 있을 때만 보낸다. 없으면 침묵하고 발송 기록도 남기지 않는다 |
+| `nudge_window_minutes` | `20` | 슬롯이 열려 있는 시간. 서버가 꺼져 놓친 점검은 다시 보내지 않는다 |
+| `calendar` · `mail` | `false` | 브리핑에 일정과 마감 언급 메일을 넣는다. 각각 calendar · gmail 스코프가 필요하다 |
+| `calendar_exclude` | `[]` | 이름에 이 문자열이 들어간 달력은 뺀다 |
+| `oauth_ttl_days` | `0` | Testing 상태의 OAuth 앱은 refresh token이 7일 뒤 죽는다. `7`로 두면 만료 48시간 전부터 브리핑에 경고가 붙는다. 앱을 게시했다면 `0` |
+| `stale_days` · `new_undated_days` | `14` · `3` | 오래된 경과로 넘기는 기준, 날짜 없이 등록된 작업을 🆕 구간에 보여 주는 기간 |
+| `capture_list` · `capture_default_due` | `""` · `this-week` | 새 작업이 들어갈 목록(빈 값 = 첫 목록)과, 날짜 없이 등록된 작업에 줄 날짜(`none` · `today` · `tomorrow` · `this-week`=금요일) |
+
+한 tick에 메시지는 하나만 나간다. 순서는 정기 요약, 마감 점검, 변경 알림이다. 정기 요약 뒤 45분 안에는 마감 점검을 보내지 않고, 조용한 시간에는 둘 다 보내지 않는다. 마감 점검에 표시된 작업은 변경 알림 대기열에서 빠진다.
+
+보조 출처는 tick이 시작된 지 75초 안일 때만 읽는다(`SIDE_BUDGET`). systemd가 240초에 unit을 끊는데 Tasks 전체 조회와 Telegram 전송만으로 최악 235초가 들기 때문이다. 실측은 캘린더 약 7초, 메일 약 2초, 인증 조회 1초 미만이다.
+
+통합 브리핑 모듈이 없거나 예외를 내면 예전 `summary()`로 대체하고 메시지 끝에 사유를 붙인다. 같은 사유가 `status`의 `brief_error`에 남는다.
+
+### 캡처 CLI
+
+```bash
+python3 tools/google_tasks_agent/secretary.py add --title "학회 초록 제출" --due 2026-09-25
+python3 tools/google_tasks_agent/secretary.py add --title "날짜를 말하지 않은 일"      # capture_default_due 적용
+python3 tools/google_tasks_agent/secretary.py done "초록 제출"
+python3 tools/google_tasks_agent/secretary.py due "초록 제출" fri
+python3 tools/google_tasks_agent/secretary.py find "초록"
+python3 tools/google_tasks_agent/secretary.py brief [--scope now|nudge] [--live]
+```
+
+- `--due`는 `YYYY-MM-DD` · `today` · `tomorrow` · `+3d` · 요일(`fri`, `금`) · `this-week` · `none`만 받는다. 그 밖의 표현은 추측하지 않고 거부한다.
+- `add`는 쓰기 직전에 대상 목록을 다시 읽어 같은 제목(공백·문장부호·대소문자 무시)의 미완료 작업이 있으면 만들지 않는다.
+- 종료 코드 2는 결정 요청이다: `duplicate` · `ambiguous` · `not_found` · `list_not_found`.
+- Google이 저장한 날짜가 요청과 다르면 `created_but_due_differs`와 종료 코드 1로 알린다.
+- `brief`·`find`·`done`·`due`는 데몬의 스냅샷(20분 이내)을 읽고, 없거나 오래됐으면 직접 조회한다.
+
+Claude Code에서는 `skills/secretary/SKILL.md`가 이 CLI를 쓴다. `ln -s <repo>/skills/secretary ~/.claude/skills/secretary`로 연결하고, PATH에 `exec python3 <repo>/tools/google_tasks_agent/secretary.py "$@"` 한 줄짜리 `chavis-secretary` 래퍼를 둔다.
+
+### 한계
+
+- Google Tasks의 날짜는 하루 단위다. 제목의 "오전 10시까지"는 날짜만 읽는다.
+- 제목 기한은 `까지`나 앞에 붙은 `~`가 있을 때만 인정한다. `10월 27일(화) 웨비나` 같은 행사 날짜와 `9/15~9/21` 같은 기간은 기한으로 읽지 않는다. 연도가 없으면 작업의 `updated` 날짜에서 추정하므로, 오래된 작업을 고치면 내년으로 해석될 수 있다.
+- 변경 알림 대기열은 여전히 Google 날짜만 본다. 제목 기한만 있는 새 작업은 다음 브리핑이나 마감 점검에 나온다.
+- 프로세스가 시작조차 못 하는 장애(문법 오류, 전원 중단)는 여전히 Telegram으로 알릴 수 없다. `OnFailure=` 알림 unit은 아직 없다.
+
 ## 설치와 점검
 
 설치기는 기본 실행에서 변경 예정만 보여준다. `--enable`은 자신의 두 systemd unit과
