@@ -2,7 +2,7 @@
 """Conversational front door for the Google Tasks reminder: capture, close, reschedule, brief.
 
 The reminder daemon (agent.py) stays read-only. Every write to Google Tasks goes through
-this file, is limited to add / complete / set-date, and never deletes anything.
+this file, is limited to add / complete / set-date / retitle, and never deletes anything.
 Exit codes: 0 done, 1 error, 2 a decision is needed (duplicate, ambiguous, not found).
 """
 from __future__ import annotations
@@ -50,7 +50,8 @@ def parse_day(value, today):
     if re.fullmatch(r'\+\d{1,3}d', word):
         return today + timedelta(days=int(word[1:-1]))
     if word in ('this-week', '이번주', '이번 주', '금주'):
-        return today + timedelta(days=max(0, 4 - today.weekday()))
+        # Said out loud it means this Friday, or Sunday once the working week is over.
+        return today + timedelta(days=(4 if today.weekday() <= 4 else 6) - today.weekday())
     key = word.removesuffix('요일')
     if key in WEEKDAY_WORDS:
         return today + timedelta(days=(WEEKDAY_WORDS[key] - today.weekday()) % 7)
@@ -58,6 +59,16 @@ def parse_day(value, today):
         return date.fromisoformat(value.strip())
     except ValueError:
         raise ValueError('due_must_be_YYYY-MM-DD_or_today_tomorrow_+Nd_weekday_this-week') from None
+
+
+def policy_day(policy, today):
+    """Date for a capture that named none. 'this-week' is the nearest Friday at least two days away,
+    so a Thursday-evening or weekend capture is not born due today."""
+    if policy == 'none':
+        return None
+    if policy == 'this-week':
+        return today + timedelta(days=(4 - today.weekday() - 2) % 7 + 2)
+    return parse_day(policy, today)
 
 
 def snapshot_tasks(cfg, now):
@@ -78,9 +89,9 @@ def snapshot_tasks(cfg, now):
         return None
 
 
-def open_tasks(cfg, now, live=False, fetch=agent.fetch_tasks):
+def open_tasks(cfg, now, live=False, fetch=None):
     tasks = None if live else snapshot_tasks(cfg, now)
-    return tasks if tasks is not None else fetch(cfg)[0]
+    return tasks if tasks is not None else (fetch or agent.fetch_tasks)(cfg)[0]
 
 
 def task_lists(cfg, read):
@@ -143,7 +154,7 @@ def one(tasks, query, today):
 
 
 def add(cfg, now, title, due='', list_name='', notes='', allow_duplicate=False, allow_past=False,
-        dry_run=False, read=agent.gog_json):
+        dry_run=False, read=agent.gog_json, snapshot=None):
     today = now.date()
     title = ' '.join(title.split())
     if not title or len(title) > 1024:
@@ -156,19 +167,22 @@ def add(cfg, now, title, due='', list_name='', notes='', allow_duplicate=False, 
     elif due:
         day, defaulted = parse_day(due, today), False
     else:
-        day = None if policy == 'none' else parse_day(policy, today)
+        day = policy_day(policy, today)
         defaulted = day is not None
     if day and day < today and not allow_past:
         raise ValueError('due_is_in_the_past_use_--allow-past')
     target = pick_list(task_lists(cfg, read), list_name or cfg.get('capture_list', ''))
     if not allow_duplicate:
         # The snapshot may lag by minutes, so the target list is re-read before writing.
+        # Other lists are checked against the snapshot, which is good enough to catch an old twin.
         rows = read(cfg, ['tasks', 'list', target['id'], '--all', '--max', '100']).get('tasks') or []
-        for row in rows:
-            if isinstance(row, dict) and row.get('status') == 'needsAction' and normal(row.get('title')) == normal(title):
-                existing = {'key': f'{target["id"]}/{row["id"]}', 'title': row.get('title', ''),
-                            'list_title': target.get('title', ''), 'due': (row.get('due') or '')[:10],
-                            'updated': row.get('updated', '')}
+        twins = [{'key': f'{target["id"]}/{row["id"]}', 'title': row.get('title', ''),
+                  'list_title': target.get('title', ''), 'due': (row.get('due') or '')[:10],
+                  'updated': row.get('updated', '')}
+                 for row in rows if isinstance(row, dict) and row.get('id') and row.get('status') == 'needsAction']
+        twins += [task for task in (snapshot or {}).values() if task.get('list_id') != target['id']]
+        for existing in twins:
+            if normal(existing['title']) == normal(title):
                 raise Decision({'status': 'duplicate', 'existing': describe(existing, today),
                                 'hint': '같은 제목의 미완료 작업이 있습니다. 날짜만 바꾸려면 due, 그래도 새로 만들려면 --allow-duplicate.'})
     command = ['tasks', 'add', target['id'], '--title', title]
@@ -192,7 +206,9 @@ def add(cfg, now, title, due='', list_name='', notes='', allow_duplicate=False, 
 
 
 def complete(cfg, now, query, dry_run=False, read=agent.gog_json, tasks=None):
-    task = one(tasks if tasks is not None else open_tasks(cfg, now), query, now.date())
+    # Writes pick their target from a live read: a snapshot that misses a just-added task
+    # can turn an ambiguous query into a confident match on the wrong one.
+    task = one(tasks if tasks is not None else open_tasks(cfg, now, live=True), query, now.date())
     read(cfg, ['tasks', 'done', task['list_id'], task['id']] + (['--dry-run'] if dry_run else []))
     return {'status': 'dry_run' if dry_run else 'completed', **describe(task, now.date())}
 
@@ -202,12 +218,28 @@ def reschedule(cfg, now, query, due, allow_past=False, dry_run=False, read=agent
     day = parse_day(due, today)
     if day < today and not allow_past:
         raise ValueError('due_is_in_the_past_use_--allow-past')
-    task = one(tasks if tasks is not None else open_tasks(cfg, now), query, today)
+    task = one(tasks if tasks is not None else open_tasks(cfg, now, live=True), query, today)
     read(cfg, ['tasks', 'update', task['list_id'], task['id'], '--due', day.isoformat()]
          + (['--dry-run'] if dry_run else []))
     moved = describe(task | {'due': day.isoformat()}, today)
-    return {'status': 'dry_run' if dry_run else 'rescheduled', **moved,
-            'reminders': reminder_plan(cfg, moved['tier'], now)}
+    result = {'status': 'dry_run' if dry_run else 'rescheduled', **moved,
+              'reminders': reminder_plan(cfg, moved['tier'], now)}
+    if moved['due_source'] == 'title':
+        # The earlier of the two dates rules, so the date written in the title still decides the tier.
+        result['title_deadline_earlier'] = moved['due']
+        result['hint'] = '제목에 적힌 기한이 새 날짜보다 이릅니다. 제목의 기한을 retitle로 고쳐야 브리핑에서 내려갑니다.'
+    return result
+
+
+def retitle(cfg, now, query, title, dry_run=False, read=agent.gog_json, tasks=None):
+    title = ' '.join(title.split())
+    if not title or len(title) > 1024:
+        raise ValueError('title_must_be_1_to_1024_characters')
+    task = one(tasks if tasks is not None else open_tasks(cfg, now, live=True), query, now.date())
+    read(cfg, ['tasks', 'update', task['list_id'], task['id'], '--title', title]
+         + (['--dry-run'] if dry_run else []))
+    return {'status': 'dry_run' if dry_run else 'retitled', 'previous_title': task['title'],
+            **describe(task | {'title': title}, now.date())}
 
 
 def show(cfg, now, scope='full', live=False, read=agent.gog_json):
@@ -236,9 +268,12 @@ def main(argv=None):
     moving = commands.add_parser('due', help='set the date of the single task matching QUERY')
     moving.add_argument('query')
     moving.add_argument('day')
+    naming = commands.add_parser('retitle', help='replace the title of the single task matching QUERY')
+    naming.add_argument('query')
+    naming.add_argument('title')
     for sub in (adding, moving):
         sub.add_argument('--allow-past', action='store_true')
-    for sub in (adding, closing, moving):
+    for sub in (adding, closing, moving, naming):
         sub.add_argument('--dry-run', action='store_true')
     finding = commands.add_parser('find', help='open tasks whose title contains QUERY')
     finding.add_argument('query')
@@ -255,11 +290,13 @@ def main(argv=None):
             return 0
         if args.command == 'add':
             result = add(cfg, now, args.title, args.due, args.list_name, args.notes,
-                         args.allow_duplicate, args.allow_past, args.dry_run)
+                         args.allow_duplicate, args.allow_past, args.dry_run, snapshot=snapshot_tasks(cfg, now))
         elif args.command == 'done':
             result = complete(cfg, now, args.query, args.dry_run)
         elif args.command == 'due':
             result = reschedule(cfg, now, args.query, args.day, args.allow_past, args.dry_run)
+        elif args.command == 'retitle':
+            result = retitle(cfg, now, args.query, args.title, args.dry_run)
         elif args.command == 'find':
             matches = find(open_tasks(cfg, now), args.query)
             result = {'status': 'ok', 'count': len(matches),

@@ -43,15 +43,26 @@ def task_text(task, today):
     return f'{clip(task["title"])} ({tiers.day_label(task["eff_due"], today)}{mark})'
 
 
-def rotate(group, cap, cycle):
+def rotate(group, cap, cycle, fixed=0):
+    """First `fixed` rows always show; the rest take turns so nothing past the cap stays hidden."""
     if len(group) <= cap:
         return group
-    offset = (cycle * cap) % len(group)
-    return (group[offset:] + group[:offset])[:cap]
+    rest = group[fixed:]
+    offset = (cycle * (cap - fixed)) % len(rest)
+    return group[:fixed] + (rest[offset:] + rest[:offset])[:cap - fixed]
 
 
-def right_now(groups, events, now):
-    """One line: the meeting in progress or about to start, otherwise the most urgent task."""
+def turn(now):
+    """Changes with every message of the day: morning brief, two checks, evening brief."""
+    return now.date().toordinal() * 4 + sum(now.hour >= hour for hour in (12, 15, 17))
+
+
+def right_now(groups, events, now, urgent=None):
+    """One line: the meeting in progress or about to start, otherwise the most urgent task.
+
+    `urgent` is the caller's own ordering; its head is always pinned in the printed block,
+    so the task named here is one the reader can find below.
+    """
     timed = [e for e in sources.events_on(events, now.date(), now) if not e['all_day']]
     for event in timed:
         if event['start'] <= now < event['end']:
@@ -60,7 +71,7 @@ def right_now(groups, events, now):
     if upcoming and upcoming['start'] - now <= timedelta(minutes=30):
         minutes = int((upcoming['start'] - now).total_seconds() // 60)
         return f'▶ 지금: {minutes}분 뒤 시작 · {event_text(upcoming)}'
-    urgent = tiers.critical(groups)
+    urgent = tiers.critical(groups) if urgent is None else urgent
     if urgent:
         room = ''
         if upcoming:
@@ -95,8 +106,8 @@ def block_lines(entry):
     return ['', entry['header']] + [f'• {text}' for text, _ in entry['items']] + entry['footer']
 
 
-def task_block(label, group, cap, today, cycle=None, droppable=False, hint=''):
-    shown = group[:cap] if cycle is None else rotate(group, cap, cycle)
+def task_block(label, group, cap, today, cycle, droppable=False, hint='', fixed=0, shown=None):
+    shown = rotate(group, cap, cycle, fixed) if shown is None else shown
     footer = [f'  외 {len(group) - len(shown)}개'] if len(group) > len(shown) else []
     return block(f'{label} ({len(group)})', [(task_text(t, today), t) for t in shown], droppable,
                  footer + ([hint] if hint else []))
@@ -110,8 +121,8 @@ def event_block(header, rows, cap, droppable=False):
 def build(tasks, cfg, now, events=None, mail=None):
     today = now.date()
     groups = tiers.classify(tasks.values(), today, cfg.get('upcoming_days', 3), cfg.get('stale_days', 14))
-    cycle = today.toordinal() * 2 + (now.hour >= 12)
-    fresh = tiers.recently_added_undated(groups, now, cfg.get('new_undated_days', 3))
+    cycle = turn(now)
+    fresh = tiers.recently_added_undated(groups, now, cfg.get('new_undated_days', 7))
     blocks = []
 
     if events is not None:
@@ -120,13 +131,14 @@ def build(tasks, cfg, now, events=None, mail=None):
     elif cfg.get('calendar'):
         blocks.append(block('🗓 일정: 캘린더를 읽지 못했습니다.', []))
 
-    for label, name, cap in (('🔴 기한 경과 · 아직 미완료', 'overdue', 5),
-                             ('🟠 오늘 일과 종료 전 반드시', 'today', 6),
-                             ('🟡 이번 주 안에 반드시', 'week', 6)):
+    # The head of each urgent block is pinned (latest overdue, soonest this week); the overflow rotates.
+    for label, name, cap, fixed in (('🔴 기한 경과 · 아직 미완료', 'overdue', 5, 2),
+                                    ('🟠 오늘 일과 종료 전 반드시', 'today', 6, 1),
+                                    ('🟡 이번 주 안에 반드시', 'week', 6, 2)):
         if groups[name]:
-            blocks.append(task_block(label, groups[name], cap, today))
+            blocks.append(task_block(label, groups[name], cap, today, cycle, fixed=fixed))
     if fresh:
-        blocks.append(task_block('🆕 최근 등록 · 날짜 미정', fresh, 3, today,
+        blocks.append(task_block('🆕 최근 등록 · 날짜 미정', fresh, 3, today, cycle, fixed=1,
                                  hint='  → 마감일을 정하면 위 단계로 올라가 리마인드됩니다.'))
 
     if events is not None and now.hour >= 15:
@@ -147,6 +159,9 @@ def build(tasks, cfg, now, events=None, mail=None):
     undated = [t for t in groups['undated'] if t['key'] not in seen]
     starred = [t for t in undated if t['list_title'].casefold() == 'high priority']
     rest = [t for t in undated if t['list_title'].casefold() != 'high priority']
+    if groups['stale']:
+        blocks.append(task_block(f'🕸 {cfg.get("stale_days", 14)}일 넘게 지난 기한 · 정리 필요', groups['stale'], 2,
+                                 today, cycle, droppable=True))
     if starred:
         blocks.append(task_block('⭐ High Priority · 날짜 없음', starred, 3, today, cycle, droppable=True))
     if rest:
@@ -198,16 +213,23 @@ def nudge(tasks, cfg, now, events=None, issued=None):
     groups = tiers.classify(tasks.values(), today, cfg.get('upcoming_days', 3), cfg.get('stale_days', 14))
     # Digests keep every recent overdue item; a nudge repeats only the last few days so it stays worth reading.
     floor = (today - timedelta(days=cfg.get('nudge_overdue_days', 3))).isoformat()
-    urgent = [t for t in tiers.critical(groups) if t['eff_due'] >= floor]
+    # Today's deadlines lead: a pile of recent overdue items must not push them out of an end-of-day check.
+    todays, late = groups['today'], [t for t in groups['overdue'] if t['eff_due'] >= floor]
+    urgent = todays + late
     if not urgent:
         return '', {}
+    cap, cycle = 6, turn(now)
+    if len(todays) >= cap:
+        shown = rotate(todays, cap, cycle, fixed=1)
+    else:
+        shown = todays + rotate(late, cap - len(todays), cycle, fixed=0 if todays else 1)
     head = [f'⏰ 오늘 마감 점검 · {now:%H:%M}',
             f'오늘 일과 종료 전에 끝내야 할 일 {len(urgent)}건이 아직 열려 있습니다.',
-            right_now(groups, events, now)]
+            right_now(groups, events, now, urgent)]
     tail = ['']
     warning = credential_warning(issued, cfg, now)
     if warning:
         tail += [warning, '']
     tail += ['끝냈다면 Google Tasks에서 완료 처리하세요. 미루려면 날짜를 바꾸면 됩니다.', LINK]
-    text, kept = fit(head, [task_block('아직 열려 있는 일', urgent, 6, today)], tail)
+    text, kept = fit(head, [task_block('아직 열려 있는 일', urgent, cap, today, cycle, shown=shown)], tail)
     return text, members_of(kept)

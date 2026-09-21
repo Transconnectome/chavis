@@ -36,7 +36,7 @@ API로 읽거나 쓸 수 없으므로 Google 앱에 설정한 정확한 시각 �
 | 기한·구간 | `tiers.py` | 제목의 `9/25까지`·`(~9/25)` 표기를 기한으로 읽고, 작업을 경과(14일 이내)·오늘·이번 주·이후·오래된 경과·날짜 없음으로 나눈다. 순수 함수 |
 | 보조 출처 | `sources.py` | `gog`로 캘린더(7일), 중요·미확인 메일, 인증 발급 시각을 읽는다. 실패하면 `None`을 돌려주고 리마인더는 계속 간다 |
 | 브리핑 | `brief.py` | "▶ 지금" 한 줄, 오늘 남은 일정, 🔴 경과 · 🟠 오늘 · 🟡 이번 주 · 🆕 날짜 미정, 저녁에는 내일 일정, 마감 언급 메일. UTF-16 4096 단위를 넘으면 선택 구간부터 버린다 |
-| 캡처 CLI | `secretary.py` | `add` · `done` · `due` · `find` · `brief` · `lists`. Google Tasks에 쓰는 유일한 경로이며 삭제는 구현하지 않았다 |
+| 캡처 CLI | `secretary.py` | `add` · `done` · `due` · `retitle` · `find` · `brief` · `lists`. Google Tasks에 쓰는 유일한 경로이며 삭제는 구현하지 않았다 |
 
 `agent.py` 자체는 계속 읽기 전용이다. 달라진 것은 요약 본문을 `compose()`로 만든다는 점과 마감 점검(nudge) 슬롯뿐이다.
 
@@ -50,38 +50,45 @@ API로 읽거나 쓸 수 없으므로 Google 앱에 설정한 정확한 시각 �
 | `calendar` · `mail` | `false` | 브리핑에 일정과 마감 언급 메일을 넣는다. 각각 calendar · gmail 스코프가 필요하다 |
 | `calendar_exclude` | `[]` | 이름에 이 문자열이 들어간 달력은 뺀다 |
 | `oauth_ttl_days` | `0` | Testing 상태의 OAuth 앱은 refresh token이 7일 뒤 죽는다. `7`로 두면 만료 48시간 전부터 브리핑에 경고가 붙는다. 앱을 게시했다면 `0` |
-| `stale_days` · `new_undated_days` | `14` · `3` | 오래된 경과로 넘기는 기준, 날짜 없이 등록된 작업을 🆕 구간에 보여 주는 기간 |
-| `capture_list` · `capture_default_due` | `""` · `this-week` | 새 작업이 들어갈 목록(빈 값 = 첫 목록)과, 날짜 없이 등록된 작업에 줄 날짜(`none` · `today` · `tomorrow` · `this-week`=금요일) |
+| `stale_days` · `new_undated_days` | `14` · `7` | 오래된 경과로 넘기는 기준, 날짜 없이 등록된 작업을 🆕 구간에 보여 주는 기간 |
+| `capture_list` · `capture_default_due` | `""` · `none` | 새 작업이 들어갈 목록(빈 값 = 첫 목록)과, 날짜 없이 등록된 작업에 줄 날짜. `none`은 날짜를 지어내지 않는다. `today` · `tomorrow` · `this-week`(이틀 이상 남은 가장 가까운 금요일)를 고르면 그 날짜가 Google Tasks에 실제 기한처럼 남고 나중에 구분할 수 없다 |
+
+config의 알려진 키는 기본값과 타입이 같아야 한다. `"brief": "false"`나 `"nudge_times": null`은 `invalid_configuration`으로 거부한다. config가 거부되면 tick이 시작되지 않아 장애 알림도 나가지 않으므로, 고칠 때는 임시 파일에 쓰고 `agent.config()`로 읽어 본 뒤 교체한다.
+
+구간마다 표시 개수에 상한이 있다(경과 5 · 오늘 6 · 이번 주 6 · 점검 6). 상한을 넘으면 맨 앞 항목만 고정하고 나머지는 하루 네 번의 메시지마다 돌아가며 보여 준다. 마감 점검은 오늘 기한을 먼저 채우고 남는 자리에 최근 경과를 넣는다. 14일 넘게 지난 기한은 급한 구간에 올리지 않고 🕸 구간에 두 건씩 돌려 보여 준다.
 
 한 tick에 메시지는 하나만 나간다. 순서는 정기 요약, 마감 점검, 변경 알림이다. 정기 요약 뒤 45분 안에는 마감 점검을 보내지 않고, 조용한 시간에는 둘 다 보내지 않는다. 마감 점검에 표시된 작업은 변경 알림 대기열에서 빠진다.
 
 보조 출처는 tick이 시작된 지 75초 안일 때만 읽는다(`SIDE_BUDGET`). systemd가 240초에 unit을 끊는데 Tasks 전체 조회와 Telegram 전송만으로 최악 235초가 들기 때문이다. 실측은 캘린더 약 7초, 메일 약 2초, 인증 조회 1초 미만이다.
 
-통합 브리핑 모듈이 없거나 예외를 내면 예전 `summary()`로 대체하고 메시지 끝에 사유를 붙인다. 같은 사유가 `status`의 `brief_error`에 남는다.
+통합 브리핑 모듈이 없거나 예외를 내면 예전 `summary()`로 대체하고 메시지 끝에 사유를 붙인다. 마감 점검은 Google 날짜만으로 고른 목록으로 대체한다. 같은 사유가 `status`의 `brief_error`에 남고, 다음 정기 요약이 성공하면 지워진다.
 
 ### 캡처 CLI
 
 ```bash
 python3 tools/google_tasks_agent/secretary.py add --title "학회 초록 제출" --due 2026-09-25
-python3 tools/google_tasks_agent/secretary.py add --title "날짜를 말하지 않은 일"      # capture_default_due 적용
+python3 tools/google_tasks_agent/secretary.py add --title "날짜를 말하지 않은 일"      # capture_default_due 적용 (기본 none)
 python3 tools/google_tasks_agent/secretary.py done "초록 제출"
 python3 tools/google_tasks_agent/secretary.py due "초록 제출" fri
+python3 tools/google_tasks_agent/secretary.py retitle "초록 제출" "학회 초록 제출 (9월 28일까지)"
 python3 tools/google_tasks_agent/secretary.py find "초록"
 python3 tools/google_tasks_agent/secretary.py brief [--scope now|nudge] [--live]
 ```
 
-- `--due`는 `YYYY-MM-DD` · `today` · `tomorrow` · `+3d` · 요일(`fri`, `금`) · `this-week` · `none`만 받는다. 그 밖의 표현은 추측하지 않고 거부한다.
-- `add`는 쓰기 직전에 대상 목록을 다시 읽어 같은 제목(공백·문장부호·대소문자 무시)의 미완료 작업이 있으면 만들지 않는다.
+- `--due`는 `YYYY-MM-DD` · `today` · `tomorrow` · `+3d` · 요일(`fri`, `금`) · `this-week`(금요일, 주말에는 일요일) · `none`만 받는다. 그 밖의 표현은 추측하지 않고 거부한다.
+- `add`는 쓰기 직전에 대상 목록을 다시 읽고 다른 목록은 스냅샷으로 확인해, 같은 제목(공백·문장부호·대소문자 무시)의 미완료 작업이 있으면 만들지 않는다. 스냅샷보다 늦게 다른 목록에 생긴 같은 제목은 잡지 못한다.
+- `done` · `due` · `retitle`은 대상을 항상 직접 조회한 목록에서 고른다(약 12초). 스냅샷에 없는 방금 등록한 작업 때문에 엉뚱한 작업이 단일 일치로 잡히는 것을 막는다.
+- 제목에 적힌 기한이 새 날짜보다 이르면 `due`는 `title_deadline_earlier`로 알린다. 두 날짜 중 이른 쪽이 구간을 정하므로 제목을 `retitle`로 고쳐야 브리핑에서 내려간다.
 - 종료 코드 2는 결정 요청이다: `duplicate` · `ambiguous` · `not_found` · `list_not_found`.
 - Google이 저장한 날짜가 요청과 다르면 `created_but_due_differs`와 종료 코드 1로 알린다.
-- `brief`·`find`·`done`·`due`는 데몬의 스냅샷(20분 이내)을 읽고, 없거나 오래됐으면 직접 조회한다.
+- `brief`·`find`는 데몬의 스냅샷(20분 이내)을 읽고, 없거나 오래됐으면 직접 조회한다. 쓰기 직후에는 `brief --live`를 쓴다.
 
 Claude Code에서는 `skills/secretary/SKILL.md`가 이 CLI를 쓴다. `ln -s <repo>/skills/secretary ~/.claude/skills/secretary`로 연결하고, PATH에 `exec python3 <repo>/tools/google_tasks_agent/secretary.py "$@"` 한 줄짜리 `chavis-secretary` 래퍼를 둔다.
 
 ### 한계
 
 - Google Tasks의 날짜는 하루 단위다. 제목의 "오전 10시까지"는 날짜만 읽는다.
-- 제목 기한은 `까지`나 앞에 붙은 `~`가 있을 때만 인정한다. `10월 27일(화) 웨비나` 같은 행사 날짜와 `9/15~9/21` 같은 기간은 기한으로 읽지 않는다. 연도가 없으면 작업의 `updated` 날짜에서 추정하므로, 오래된 작업을 고치면 내년으로 해석될 수 있다.
+- 제목 기한은 `까지`나 앞에 붙은 `~`가 있을 때만 인정한다. `10월 27일(화) 웨비나` 같은 행사 날짜와 `9/15~9/21` 같은 기간은 기한으로 읽지 않는다. 연도가 없는 날짜는 `9/25`와 `9월 25일`만 읽고 `9.25`·`9-25`는 읽지 않는다(`버전 1.5까지`, `챕터 2-3까지`와 구분할 수 없다). 연도가 없으면 작업의 `updated` 날짜에서 추정하므로, 오래된 작업을 고치면 내년으로 해석될 수 있다. 규칙은 전달된 행정 메일 제목에서 점검했고, 자유롭게 쓴 제목에서의 오탐률은 재지 않았다.
 - 변경 알림 대기열은 여전히 Google 날짜만 본다. 제목 기한만 있는 새 작업은 다음 브리핑이나 마감 점검에 나온다.
 - 프로세스가 시작조차 못 하는 장애(문법 오류, 전원 중단)는 여전히 Telegram으로 알릴 수 없다. `OnFailure=` 알림 unit은 아직 없다.
 

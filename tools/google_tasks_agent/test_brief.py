@@ -112,10 +112,11 @@ class BriefTests(unittest.TestCase):
         order = [text.index(label) for label in ('🔴 기한 경과', '🟠 오늘 일과 종료 전', '🟡 이번 주 안에', '🆕 최근 등록', '⭐ High Priority')]
         self.assertEqual(order, sorted(order))
         self.assertIn('보고서 9/25까지 (9/25(금) · D-4 · 제목의 기한)', text)
-        self.assertNotIn('오래된 기록', text)
         self.assertNotIn('먼 일', text)
         self.assertIn('오래된 경과 1', text)
-        self.assertEqual(set(members), {'late', 'now', 'wed', 'titled', 'fresh', 'star'})
+        # Long-overdue work never reaches the urgent blocks, but it keeps a small rotating corner.
+        self.assertGreater(text.index('오래된 기록'), text.index('🕸 14일 넘게 지난 기한'))
+        self.assertEqual(set(members), {'late', 'now', 'wed', 'titled', 'fresh', 'star', 'ancient'})
         self.assertTrue(all(tasks[key]['title'] in text for key in members))
         self.assertTrue(text.endswith(brief.LINK))
 
@@ -203,6 +204,32 @@ class BriefTests(unittest.TestCase):
         self.assertNotIn('오래된 기록', text)
         self.assertEqual(set(members), {'late', 'now'})
         self.assertLessEqual(brief.units(text), brief.LIMIT)
+
+    def test_overflow_beyond_the_cap_takes_turns_across_the_day(self):
+        tasks = self.tasks(*(task(f'now-{i:02}', f'오늘 일 {i:02}', due='2026-09-21') for i in range(10)),
+                           *(task(f'late-{i}', f'지난 일 {i}', due=f'2026-09-{20 - i:02}') for i in range(8)))
+        seen_today, seen_late = set(), set()
+        for moment in ('2026-09-21 08:30', '2026-09-21 13:30', '2026-09-21 16:30', '2026-09-21 17:30'):
+            maker = brief.render if moment.endswith(('08:30', '17:30')) else brief.nudge
+            text, members = maker(tasks, CFG | {'nudge_overdue_days': 14}, at(moment), events=[])
+            self.assertEqual({key for key in tasks if tasks[key]['title'] in text}, set(members))
+            seen_today |= {key for key in members if key.startswith('now-')}
+            seen_late |= {key for key in members if key.startswith('late-')}
+        self.assertEqual(len(seen_today), 10)
+        # The two most recent overdue rows are pinned in every brief.
+        morning = brief.render(tasks, CFG, at('2026-09-21 08:30'), events=[])[0]
+        evening = brief.render(tasks, CFG, at('2026-09-21 17:30'), events=[])[0]
+        for pinned in ('지난 일 0', '지난 일 1'):
+            self.assertIn(pinned, morning)
+            self.assertIn(pinned, evening)
+        self.assertGreater(len(seen_late), 5)
+
+    def test_nudge_lists_todays_deadlines_before_recent_overdue_ones(self):
+        tasks = self.tasks(*(task(f'late-{i}', f'지난 일 {i}', due='2026-09-20') for i in range(6)),
+                           task('now', '오늘 마감인 일', due='2026-09-21'))
+        text, members = brief.nudge(tasks, CFG, at('2026-09-21 16:30'), events=[])
+        self.assertIn('now', members)
+        self.assertLess(text.index('오늘 마감인 일'), text.index('지난 일'))
 
     def test_nudge_caps_the_list_and_reports_only_printed_members(self):
         tasks = self.tasks(*(task(f'now-{i}', f'오늘 일 {i:02}', due='2026-09-21') for i in range(9)))

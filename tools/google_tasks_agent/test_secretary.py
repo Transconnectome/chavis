@@ -62,7 +62,17 @@ class ParseDayTests(unittest.TestCase):
                   '2026-10-02': '2026-10-02'}
         for word, day in expect.items():
             self.assertEqual(secretary.parse_day(word, MONDAY).isoformat(), day, word)
-        self.assertEqual(secretary.parse_day('this-week', date(2026, 9, 26)).isoformat(), '2026-09-26')
+        # Spoken on Friday it is today; over the weekend it is Sunday, never a day already gone.
+        for today, day in (('2026-09-25', '2026-09-25'), ('2026-09-26', '2026-09-27'), ('2026-09-27', '2026-09-27')):
+            self.assertEqual(secretary.parse_day('this-week', date.fromisoformat(today)).isoformat(), day)
+
+    def test_policy_friday_is_always_at_least_two_days_away(self):
+        expect = {'2026-09-21': '2026-09-25', '2026-09-23': '2026-09-25', '2026-09-24': '2026-10-02',
+                  '2026-09-25': '2026-10-02', '2026-09-26': '2026-10-02', '2026-09-27': '2026-10-02'}
+        for today, day in expect.items():
+            self.assertEqual(secretary.policy_day('this-week', date.fromisoformat(today)).isoformat(), day, today)
+        self.assertIsNone(secretary.policy_day('none', MONDAY))
+        self.assertEqual(secretary.policy_day('tomorrow', MONDAY).isoformat(), '2026-09-22')
 
     def test_anything_else_is_rejected_instead_of_guessed(self):
         for word in ('next friday', '9/25', '2026-13-01', ''):
@@ -80,14 +90,14 @@ class AddTests(SecretaryCase):
 
     def test_capture_without_a_date_gets_the_policy_date_and_says_so(self):
         gog = Recorder()
-        result = secretary.add(self.cfg, at(), '말로만 등록한 일', read=gog)
+        result = secretary.add(self.cfg | {'capture_default_due': 'this-week'}, at(), '말로만 등록한 일', read=gog)
         self.assertEqual((result['due'], result['due_defaulted'], result['tier']), ('2026-09-25', True, 'week'))
         self.assertEqual(gog.writes[0][-2:], ['--due', '2026-09-25'])
         stated = secretary.add(self.cfg, at(), '날짜를 말한 일', due='내일', read=Recorder())
         self.assertFalse(stated['due_defaulted'])
 
-    def test_undated_capture_needs_an_explicit_none_or_a_none_policy(self):
-        for cfg, due in ((self.cfg, '없음'), (self.cfg | {'capture_default_due': 'none'}, '')):
+    def test_undated_capture_is_the_default_and_none_overrides_a_policy(self):
+        for cfg, due in ((self.cfg | {'capture_default_due': 'this-week'}, '없음'), (self.cfg, '')):
             gog = Recorder()
             result = secretary.add(cfg, at(), '언젠가 할 일', due=due, read=gog)
             self.assertEqual((result['due'], result['due_defaulted'], result['tier']), ('', False, 'undated'))
@@ -111,6 +121,14 @@ class AddTests(SecretaryCase):
         self.assertEqual(gog.writes, [])
         secretary.add(self.cfg, at(), '토론 평가 완료', allow_duplicate=True, read=gog)
         self.assertEqual(len(gog.writes), 1)
+
+    def test_twin_in_another_list_is_caught_from_the_snapshot(self):
+        elsewhere = {'star/z': task('z', '토론 평가 완료') | {'key': 'star/z', 'list_id': 'star', 'list_title': 'High Priority'}}
+        gog = Recorder()
+        with self.assertRaises(secretary.Decision) as raised:
+            secretary.add(self.cfg, at(), '토론 평가 완료', read=gog, snapshot=elsewhere)
+        self.assertEqual(raised.exception.payload['existing']['list'], 'High Priority')
+        self.assertEqual(gog.writes, [])
 
     def test_completed_twin_does_not_block_and_named_list_is_honoured(self):
         gog = Recorder([{'id': 'x', 'title': '토론 평가 완료', 'status': 'completed'}])
@@ -157,6 +175,31 @@ class CloseAndMoveTests(SecretaryCase):
         secretary.complete(self.cfg, at(), '토론', read=gog, tasks=tasks)
         secretary.complete(self.cfg, at(), 'work/b', read=gog, tasks=tasks)
         self.assertEqual([w[-1] for w in gog.writes], ['d', 'b'])
+
+    def test_writes_choose_their_target_from_a_live_read_not_the_snapshot(self):
+        db = agent.connect(self.cfg['state_dir'])
+        agent.snapshot(db, {'work/old': task('old', '예전 초록 제출 준비')}, 1, at('2026-09-21 09:58'))
+        db.close()
+        live = {'work/old': task('old', '예전 초록 제출 준비'), 'work/new': task('new', '학회 초록 제출')}
+        with patch.object(secretary.agent, 'fetch_tasks', return_value=(live, 1)) as fetch:
+            for action in (lambda: secretary.complete(self.cfg, at(), '초록 제출', read=Recorder()),
+                           lambda: secretary.reschedule(self.cfg, at(), '초록 제출', '내일', read=Recorder()),
+                           lambda: secretary.retitle(self.cfg, at(), '초록 제출', '새 제목', read=Recorder())):
+                with self.assertRaises(secretary.Decision) as raised:
+                    action()
+                self.assertEqual(raised.exception.payload['status'], 'ambiguous')
+        self.assertEqual(fetch.call_count, 3)
+
+    def test_postponing_past_a_deadline_written_in_the_title_is_flagged_and_retitle_fixes_it(self):
+        tasks = {'work/t': task('t', '서면평가 (9월 18일 오전 10시까지)', due='2026-09-18')}
+        gog = Recorder()
+        moved = secretary.reschedule(self.cfg, at(), '서면평가', '2026-09-25', read=gog, tasks=tasks)
+        self.assertEqual((moved['tier'], moved['title_deadline_earlier']), ('overdue', '2026-09-18'))
+        fixed = secretary.retitle(self.cfg, at(), '서면평가', '서면평가 (9월 25일까지)', read=gog,
+                                  tasks={'work/t': tasks['work/t'] | {'due': '2026-09-25'}})
+        self.assertEqual((fixed['status'], fixed['tier'], fixed['previous_title']),
+                         ('retitled', 'week', '서면평가 (9월 18일 오전 10시까지)'))
+        self.assertEqual(gog.writes[-1], ['tasks', 'update', 'work', 't', '--title', '서면평가 (9월 25일까지)'])
 
     def test_reschedule_sets_the_date_and_reports_the_new_tier(self):
         gog = Recorder()
@@ -257,6 +300,26 @@ class NudgeTickTests(SecretaryCase):
         self.assertIn('캘린더를 읽지 못했습니다', text)
         agent.compose(self.urgent, cfg, at('2026-09-21 08:30'), read=reader, spare=45)
         self.assertEqual(reads, ['calendar', 'gmail', 'auth'])
+
+    def test_nudge_survives_a_broken_brief_module_with_googles_own_dates(self):
+        import brief
+        with patch.object(brief, 'nudge', side_effect=RuntimeError('boom')):
+            result = self.tick(self.urgent, '2026-09-21 13:30')
+        self.assertEqual(result['delivery'], {'nudge': 'sent'})
+        self.assertIn('오늘 마감 점검', self.sender.call_args.args[1])
+        self.assertIn('오늘 회신', self.sender.call_args.args[1])
+        self.assertEqual(agent.status(self.db, at('2026-09-21 13:31'))['brief_error'], 'RuntimeError')
+
+    def test_configuration_rejects_wrong_types_before_they_can_crash_a_tick(self):
+        path = Path(self.cfg['state_dir']) / 'config.json'
+        for bad in ({'brief': 'false'}, {'nudge_times': None}, {'oauth_ttl_days': '7'}, {'calendar': 1},
+                    {'nudge_times': [1330]}, {'digest_times': '08:30'}, {'upcoming_days': True}):
+            path.write_text(json.dumps({'account': 'reminder-test@example.com'} | bad))
+            with self.assertRaisesRegex(ValueError, 'invalid_configuration'):
+                agent.config(path)
+        path.write_text('["not", "an", "object"]')
+        with self.assertRaisesRegex(ValueError, 'invalid_configuration'):
+            agent.config(path)
 
     def test_configuration_rejects_malformed_nudge_settings(self):
         path = Path(self.cfg['state_dir']) / 'config.json'

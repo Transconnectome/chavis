@@ -9,8 +9,9 @@ import re
 TIERS = ('overdue', 'today', 'week', 'later', 'stale', 'undated')
 WEEKDAYS = '월화수목금토일'
 
-_DATE = (r'(?<![\dA-Za-z./-])(?:(?P<y>20\d{2})\s*(?:[./-]|년)\s*)?'
-         r'(?P<m>\d{1,2})\s*(?:[./-]|월)\s*(?P<d>\d{1,2})(?!\d)\s*일?\.?')
+# Without a year only "9/25" and "9월 25일" count: "1.5" is a version and "2-3" a range of chapters.
+_DATE = (r'(?<![\dA-Za-z./-])(?:(?P<y>20\d{2})\s*(?:[./-]|년)\s*(?P<m>\d{1,2})\s*(?:[./-]|월)'
+         r'|(?P<m2>\d{1,2})\s*(?:/|월))\s*(?P<d>\d{1,2})(?![\d%])\s*일?\.?')
 _WEEKDAY = r'(?:\s*\(\s*[월화수목금토일]\s*(?:요일)?\s*\))?'
 _TIME = (r'(?:\s*(?:오전|오후|낮|밤|정오|자정)?\s*'
          r'(?:\d{1,2}\s*시(?:\s*\d{1,2}\s*분)?|\d{1,2}:\d{2})?)?')
@@ -24,7 +25,7 @@ _TILDE = re.compile(r'(?P<pre>[\d)일]\s*)?[~∼〜～]\s*' + _DATE)
 def _resolve(match, anchor):
     """Turn a regex match into a date, inferring a missing year from the anchor day."""
     try:
-        month, day = int(match['m']), int(match['d'])
+        month, day = int(match['m'] or match['m2']), int(match['d'])
         if match['y']:
             return date(int(match['y']), month, day)
         candidate = date(anchor.year, month, day)
@@ -43,8 +44,10 @@ def title_deadline(title, anchor):
     "10월 27일(화) 웨비나" is an event day, not a deadline, and is ignored.
     """
     found = []
+    # Collapsed and bounded first: the optional-whitespace groups backtrack badly on padded input.
+    text = ' '.join((title or '').split())[:400]
     for pattern in (_UNTIL, _TILDE):
-        for match in pattern.finditer(title or ''):
+        for match in pattern.finditer(text):
             if match.groupdict().get('pre'):
                 continue
             resolved = _resolve(match, anchor)

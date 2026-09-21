@@ -44,9 +44,13 @@ class TitleDeadlineTests(unittest.TestCase):
         self.assertIsNone(self.parsed('날짜 없는 평범한 작업'))
 
     def test_numbers_that_only_look_like_dates_are_ignored(self):
-        self.assertIsNone(self.parsed('880-1234까지 전화'))
-        self.assertIsNone(self.parsed('v1.2까지 릴리스'))
-        self.assertIsNone(self.parsed('2/30까지 불가능한 날짜'))
+        for title in ('880-1234까지 전화', 'v1.2까지 릴리스', '2/30까지 불가능한 날짜', '버전 1.5까지 반영',
+                      '챕터 2-3까지 읽기', '~10.5% 인상안 검토', '9.25까지 (연도 없는 점 표기)'):
+            self.assertIsNone(self.parsed(title), title)
+
+    def test_padded_titles_are_collapsed_before_matching(self):
+        self.assertEqual(self.parsed('보고서' + ' ' * 5000 + '9/25까지'), '2026-09-25')
+        self.assertIsNone(self.parsed('1' + ' ' * 5000 + '2'))
 
     def test_earliest_of_several_deadlines_wins(self):
         self.assertEqual(self.parsed('1차 9/20까지, 최종 10/5까지'), '2026-09-20')

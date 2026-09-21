@@ -31,11 +31,11 @@ DEFAULTS = {
     # tiered brief and is the first rollback lever; side sources need calendar and mail scopes that a
     # Tasks-only installation does not have.
     'brief': False, 'nudge_times': [], 'nudge_window_minutes': 20, 'nudge_overdue_days': 3,
-    'stale_days': 14, 'new_undated_days': 3,
+    'stale_days': 14, 'new_undated_days': 7,
     'calendar': False, 'mail': False, 'calendar_exclude': [], 'oauth_ttl_days': 0,
     # Capture: list title for new tasks (empty = the account's first list) and the date given to a
-    # task captured without one: 'none', 'today', 'tomorrow' or 'this-week' (Friday).
-    'capture_list': '', 'capture_default_due': 'this-week',
+    # task captured without one: 'none', 'today', 'tomorrow' or 'this-week' (the next Friday).
+    'capture_list': '', 'capture_default_due': 'none',
 }
 # Seconds of a tick that may pass before side sources are skipped. systemd kills the unit at 240s and
 # the Tasks scan plus one Telegram send can already take 235s, so side reads only run on a fast tick.
@@ -47,7 +47,16 @@ class AgentError(Exception):
 
 
 def config(path=DEFAULT_CONFIG):
-    result = DEFAULTS | (json.loads(Path(path).read_text()) if Path(path).exists() else {})
+    loaded = json.loads(Path(path).read_text()) if Path(path).exists() else {}
+    if not isinstance(loaded, dict):
+        raise ValueError('invalid_configuration')
+    result = DEFAULTS | loaded
+    # A hand-edited "brief": "false" is truthy and "nudge_times": null crashes before the health alert
+    # can run, so every known key must keep the type of its default.
+    for key, default in DEFAULTS.items():
+        value = result[key]
+        if type(value) is not type(default) or (isinstance(default, list) and not all(isinstance(v, str) for v in value)):
+            raise ValueError('invalid_configuration')
     ZoneInfo(result['timezone'])
     for value in [*result['digest_times'], *result['nudge_times'], result['quiet_start'], result['quiet_end']]:
         datetime.strptime(value, '%H:%M')
@@ -287,7 +296,13 @@ def compose(tasks, cfg, now, kind='digest', read=None, spare=SIDE_BUDGET):
     except Exception as exc:
         error = type(exc).__name__
         if kind == 'nudge':
-            return '', {}, error
+            # Without the tier module only Google's own dates are known; still better than silence.
+            today = now.date()
+            floor = (today - timedelta(days=cfg['nudge_overdue_days'])).isoformat()
+            urgent = {k: t for k, t in tasks.items() if t['due'] and floor <= t['due'] <= today.isoformat()}
+            if not urgent:
+                return '', {}, error
+            return summary(urgent, cfg, now, '오늘 마감 점검'), displayed_members(urgent, cfg, now), error
         body = summary(tasks, cfg, now) + f'\n(통합 브리핑을 만들지 못해 기본 요약으로 대체했습니다: {error})'
         return body, displayed_members(tasks, cfg, now), error
 
