@@ -1,8 +1,48 @@
 # Chavis 인수인계
 
-갱신: 2026-09-21. 이번 작업은 Google Tasks 에이전트의 OAuth 7일 만료 장애 복구, Google Tasks 업무 우선순위 동기화, 데몬 정상화 검증이다.
+갱신: 2026-09-21 오후. 이번 작업은 Google Tasks 리마인더를 Tasks·Calendar·Gmail 통합 비서로 확장한 것이다(캡처 CLI, 구간별 브리핑, 마감 점검, Claude Code 스킬).
+같은 날 오전의 OAuth 7일 만료 복구 기록은 바로 아래 "이전 작업 기록 — OAuth 만료 복구"에 당시 상태로 보존한다.
 저장소 `/home/juke/git/chavis`, 브랜치 `main`, 대상 origin/main (GitHub 외부 저장소: Transconnectome/chavis).
-이전 2026-09-18 작업과 철학 에이전트·Codex Coach 기록은 아래에 당시 상태로 보존한다.
+
+## 현재 상태 — 비서 확장 (2026-09-21 14:40 KST)
+
+- 운영 중이다. `main`에 fast-forward했고(데몬은 작업트리에서 직접 실행된다), 비공개 config에 `brief` · `calendar` · `mail` · `oauth_ttl_days: 7` · `nudge_times: ["13:30", "16:30"]`를 켰다. 직전 config는 같은 디렉터리의 `config.json.bak-20260921-pre-secretary`다.
+- 확인한 것: 오프라인 테스트 87개 통과(기존 28개는 수정 없음), 새 코드와 새 config로 돈 첫 예약 tick `Result=success`, `send-now`로 보낸 새 형식 브리핑의 Telegram 영수증, `status`의 `brief_error: null`.
+- 확인하지 못한 것: 예약된 마감 점검(16:30)과 새 형식의 정기 요약(17:30)이 실제로 나갔는지. `agent.py status`의 `deliveries`에서 `nudge:2026-09-21:16:30`과 `digest:2026-09-21:17:30`을 본다.
+- push하지 않았다. `main`은 origin보다 3커밋 앞선다.
+
+## 다음 작업 — 비서 확장
+
+1. 다음 세션 시작 때 `python3 tools/google_tasks_agent/agent.py status`로 위 두 발송과 `brief_error`를 확인한다.
+2. **2026-09-28 11:11 KST 전후로 Google 인증이 다시 만료될 것으로 본다**(9/21 11:11 발급, Testing 앱 7일 규칙). 만료 48시간 전부터 브리핑 끝에 경고가 붙는다. 근본 해결은 GCP 콘솔에서 OAuth 동의 화면을 게시(Publish)하는 것이고 사용자만 할 수 있다. 게시했다면 config의 `oauth_ttl_days`를 `0`으로 돌린다.
+3. 프로세스가 시작조차 못 하는 장애(문법 오류, config 거부, systemd timeout)는 여전히 아무 알림 없이 죽는다. `OnFailure=` 알림 unit과 발송 throttle이 다음 보강 1순위다.
+4. 알림이 많다고 느끼면 `nudge_times`를 한 개로 줄이거나 `mail`을 끈다. 08:00 OpenClaw `daily-priority`는 `gog-task-list 10`(478건 중 임의 10건)을 입력으로 쓰므로 08:30 브리핑과 내용이 겹치면서 질은 낮다. `chavis-secretary brief`로 바꾸거나 끄는 것은 사용자 결정이다.
+
+## 결정 대기 — 비서 확장
+
+- 날짜 없이 등록한 작업의 처리. 지금은 날짜를 지어내지 않는다(`capture_default_due: none`): 스킬이 마감을 한 번 묻고, 답이 없으면 7일 동안 🆕 구간에 보이다가 백로그로 내려간다. `this-week`로 바꾸면 이틀 이상 남은 가장 가까운 금요일이 들어가지만, 그 날짜는 Google Tasks에서 진짜 마감과 구분되지 않는다.
+- origin/main으로 push할지.
+
+## 함정 — 비서 확장
+
+- config는 알려진 키의 타입이 기본값과 다르면 거부되고, 거부되면 tick이 시작되지 않아 장애 알림도 없다. 고칠 때는 임시 파일에 쓰고 `agent.config(<임시 파일>)`로 읽어 본 뒤 `os.replace`한다.
+- 롤백 순서: config에서 `brief: false`와 `nudge_times: []` → 그래도 안 되면 `git checkout 0f4f4ab -- tools/google_tasks_agent/agent.py`(새 모듈은 남아 있어도 불리지 않는다).
+- 제목에 적힌 기한과 Google 날짜 중 **이른 쪽**이 구간을 정한다. `due`로 미뤄도 제목에 이른 기한이 남아 있으면 계속 경과로 잡히며, 이때 CLI가 `title_deadline_earlier`를 돌려준다. `retitle`로 제목을 고친다.
+- 14일 넘게 지난 기한은 🔴 구간과 마감 점검에 오르지 않고 🕸 구간에서 두 건씩 돌아가며 보인다. 예전 요약은 이들을 "예정일 경과"에 섞어 보여 줬다.
+- `done` · `due` · `retitle`은 매번 Google Tasks 전체를 직접 읽는다(약 12초). 스냅샷으로 바꾸지 말 것: 방금 등록한 작업이 스냅샷에 없으면 모호한 검색어가 엉뚱한 작업 하나로 확정된다.
+- `/home/juke/bin/gog-task-list`와 `/home/juke/bin/gog` 래퍼에 keyring 비밀번호가 평문으로 들어 있다(권한 0755). 이번 작업 범위 밖이라 손대지 않았다.
+
+## 인벤토리 — 비서 확장
+
+- 코드: `tools/google_tasks_agent/` 아래 `tiers.py`(기한·구간) · `sources.py`(캘린더·메일·인증 나이) · `brief.py`(브리핑·마감 점검) · `secretary.py`(캡처 CLI), 그리고 `agent.py`의 `compose()` · `open_slot()` · nudge 분기
+- 테스트: 같은 디렉터리의 `test_tiers.py` · `test_brief.py` · `test_secretary.py` (합성 데이터만 사용)
+- 스킬: `skills/secretary/SKILL.md` → `~/.claude/skills/secretary` 심볼릭 링크
+- 저장소 밖: 래퍼 `/home/juke/bin/chavis-secretary`, 운영 config와 그 백업
+- 문서: `tools/google_tasks_agent/README.md`의 "비서 확장" 절이 config 키 · CLI · 한계의 정본이다
+
+---
+
+## 이전 작업 기록 — OAuth 만료 복구 (2026-09-21 오전)
 
 ## 현재 상태
 

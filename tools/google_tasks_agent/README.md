@@ -1,7 +1,7 @@
 # Google Tasks 개인 리마인더
 
 차지욱 교수의 Google Tasks를 DGX에서 5분마다 확인하고 기존 개인 Telegram 경로로 알린다.
-`gog`의 기존 Google 인증을 이용하며 Google Tasks는 읽기만 한다.
+`gog`의 기존 Google 인증을 이용한다. 데몬(`agent.py`)은 Google Tasks를 읽기만 하고, 쓰기는 아래 "비서 확장"의 `secretary.py`만 한다.
 
 **운영 검증: 2026-09-18 02:50 KST 설치·예약 자동 실행·Telegram 전송 성공.**
 5분 타이머가 활성화되어 있으며 첫 예약 실행이 02:50:00에 시작해 02:50:08에 성공 종료했다.
