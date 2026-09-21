@@ -4,14 +4,21 @@
 같은 날 오전의 OAuth 7일 만료 복구 기록은 바로 아래 "이전 작업 기록 — OAuth 만료 복구"에 당시 상태로 보존한다.
 저장소 `/home/juke/git/chavis`, 브랜치 `main`, 대상 origin/main (GitHub 외부 저장소: Transconnectome/chavis).
 
-## 현재 상태 — 비서 확장 (2026-09-21 14:40 KST)
+## 현재 상태 — 캘린더 연동 및 비서 스케줄링 확장 (2026-09-21 17:25 KST)
 
-- 운영 중이다. `main`에 fast-forward했고(데몬은 작업트리에서 직접 실행된다), 비공개 config에 `brief` · `calendar` · `mail` · `oauth_ttl_days: 7` · `nudge_times: ["13:30", "16:30"]`를 켰다. 직전 config는 같은 디렉터리의 `config.json.bak-20260921-pre-secretary`다.
-- 확인한 것: 오프라인 테스트 87개 통과(기존 28개는 수정 없음), 새 코드와 새 config로 돈 첫 예약 tick `Result=success`, `send-now`로 보낸 새 형식 브리핑의 Telegram 영수증, `status`의 `brief_error: null`.
-- 확인하지 못한 것: 예약된 마감 점검(16:30)과 새 형식의 정기 요약(17:30)이 실제로 나갔는지. `agent.py status`의 `deliveries`에서 `nudge:2026-09-21:16:30`과 `digest:2026-09-21:17:30`을 본다.
-- push하지 않았다. `main`은 origin보다 3커밋 앞선다.
-
-## 다음 작업 — 비서 확장
+- 운영 중이다. `python3 tools/google_tasks_agent/agent.py status` 확인 결과:
+  - 16:30 예약 마감 점검(`nudge:2026-09-21:16:30`) 정상 발송 완료 (`receipt: message_id 5169`, `brief_error: null`, `consecutive_failures: 0`).
+  - 다음 정기 요약은 17:30에 발송 예정이다.
+- **캘린더 빈자리 탐색 및 동시 등록 (Dual-Write) 신규 구현 완료**:
+  - `tools/google_tasks_agent/scheduler.py`: 자연어 시간대("화요일 오후", "내일 14:00", "수요일 저녁 (1시간)") 파싱, `sources.fetch_events()` 기반 빈 슬롯 탐색 알고리즘, Google Calendar 일정 등록과 Google Tasks 등록을 동시에 수행하고 상호 참조 링크(노트)를 연결하는 `schedule()` 파이프라인 구현.
+  - `sources.py`: `create_calendar_event()`, `delete_calendar_event()` 구현.
+  - `secretary.py`: `schedule` 서브커맨드 추가. `tiers.Decision`으로 예외 일원화.
+  - 회귀 검사: 신규 `test_scheduler.py` 8개 테스트 포함 총 **95개 오프라인 단위 테스트 전원 통과** (`Ran 95 tests in 2.627s, OK`).
+  - 실측 검증: 화요일(9/22) 오후는 12:00~14:05 이노에듀, 15:00 면담, 16:00 팀미팅, 17:00 연구소 미팅으로 2시간 연속 블록이 없어 `slot_conflict`가 정상 탐지되며, 45분 요청 시 `14:05~14:50` 빈 슬롯이 정확히 감지되고, 목요일(9/24) 2시간 요청 시 `14:00~16:00` 슬롯이 완벽히 탐색됨을 확인.
+- **OpenClaw & Telegram 연동 배포 완료**:
+  - `skills/secretary/SKILL.md`를 캘린더 동시 등록 및 충돌 대안 제안 프로토콜을 포함하도록 전면 개정.
+  - `~/.agents/skills/secretary/` 및 `~/.openclaw/workspace/skills/secretary/`에 배포 완료 (`openclaw skills list`에서 `✓ ready 📦 secretary` 확인).
+  - 텔레그램 모바일 대화에서 사용자가 "화요일 오후에 할까?" 발화 시 캘린더 충돌 감지 및 대안 제안, 승인 후 자동 양방향 등록 가능 상태 구축.
 
 1. 다음 세션 시작 때 `python3 tools/google_tasks_agent/agent.py status`로 위 두 발송과 `brief_error`를 확인한다.
 2. **2026-09-28 11:11 KST 전후로 Google 인증이 다시 만료될 것으로 본다**(9/21 11:11 발급, Testing 앱 7일 규칙). 만료 48시간 전부터 브리핑 끝에 경고가 붙는다. 근본 해결은 GCP 콘솔에서 OAuth 동의 화면을 게시(Publish)하는 것이고 사용자만 할 수 있다. 게시했다면 config의 `oauth_ttl_days`를 `0`으로 돌린다.

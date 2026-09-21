@@ -9,6 +9,14 @@ import re
 TIERS = ('overdue', 'today', 'week', 'later', 'stale', 'undated')
 WEEKDAYS = '월화수목금토일'
 
+
+class Decision(Exception):
+    """Not a failure: the caller has to choose. Carries a JSON-ready payload."""
+
+    def __init__(self, payload):
+        super().__init__(payload.get('status', 'decision'))
+        self.payload = payload
+
 # Without a year only "9/25" and "9월 25일" count: "1.5" is a version and "2-3" a range of chapters.
 _DATE = (r'(?<![\dA-Za-z./-])(?:(?P<y>20\d{2})\s*(?:[./-]|년)\s*(?P<m>\d{1,2})\s*(?:[./-]|월)'
          r'|(?P<m2>\d{1,2})\s*(?:/|월))\s*(?P<d>\d{1,2})(?![\d%])\s*일?\.?')

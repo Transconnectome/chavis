@@ -71,19 +71,21 @@ python3 tools/google_tasks_agent/secretary.py add --title "날짜를 말하지 �
 python3 tools/google_tasks_agent/secretary.py done "초록 제출"
 python3 tools/google_tasks_agent/secretary.py due "초록 제출" fri
 python3 tools/google_tasks_agent/secretary.py retitle "초록 제출" "학회 초록 제출 (9월 28일까지)"
+python3 tools/google_tasks_agent/secretary.py schedule --title "원고 보고 고치기" --when "화요일 오후" [--duration 2h]
 python3 tools/google_tasks_agent/secretary.py find "초록"
 python3 tools/google_tasks_agent/secretary.py brief [--scope now|nudge] [--live]
 ```
 
+- `schedule`은 자연어 시간대("화요일 오후", "내일 14:00", "수요일 저녁 (1시간)")를 해석하여 Google Calendar의 기존 일정을 조회하고, 겹치지 않는 빈 슬롯을 찾아 Google Calendar 일정과 Google Tasks를 동시에 등록(상호 참조 노트 포함)한다. 충돌 시 `slot_conflict`와 함께 충돌 일정 목록을 반환(종료 코드 2)한다.
 - `--due`는 `YYYY-MM-DD` · `today` · `tomorrow` · `+3d` · 요일(`fri`, `금`) · `this-week`(금요일, 주말에는 일요일) · `none`만 받는다. 그 밖의 표현은 추측하지 않고 거부한다.
 - `add`는 쓰기 직전에 대상 목록을 다시 읽고 다른 목록은 스냅샷으로 확인해, 같은 제목(공백·문장부호·대소문자 무시)의 미완료 작업이 있으면 만들지 않는다. 스냅샷보다 늦게 다른 목록에 생긴 같은 제목은 잡지 못한다.
 - `done` · `due` · `retitle`은 대상을 항상 직접 조회한 목록에서 고른다(약 12초). 스냅샷에 없는 방금 등록한 작업 때문에 엉뚱한 작업이 단일 일치로 잡히는 것을 막는다.
 - 제목에 적힌 기한이 새 날짜보다 이르면 `due`는 `title_deadline_earlier`로 알린다. 두 날짜 중 이른 쪽이 구간을 정하므로 제목을 `retitle`로 고쳐야 브리핑에서 내려간다.
-- 종료 코드 2는 결정 요청이다: `duplicate` · `ambiguous` · `not_found` · `list_not_found`.
+- 종료 코드 2는 결정 요청이다: `duplicate` · `ambiguous` · `not_found` · `list_not_found` · `slot_conflict`.
 - Google이 저장한 날짜가 요청과 다르면 `created_but_due_differs`와 종료 코드 1로 알린다.
 - `brief`·`find`는 데몬의 스냅샷(20분 이내)을 읽고, 없거나 오래됐으면 직접 조회한다. 쓰기 직후에는 `brief --live`를 쓴다.
 
-Claude Code에서는 `skills/secretary/SKILL.md`가 이 CLI를 쓴다. `ln -s <repo>/skills/secretary ~/.claude/skills/secretary`로 연결하고, PATH에 `exec python3 <repo>/tools/google_tasks_agent/secretary.py "$@"` 한 줄짜리 `chavis-secretary` 래퍼를 둔다.
+Claude Code / Antigravity / OpenClaw에서는 `skills/secretary/SKILL.md`가 이 CLI를 쓴다. `ln -sfn <repo>/skills/secretary ~/.agents/skills/secretary`로 연결하고, PATH에 `exec python3 <repo>/tools/google_tasks_agent/secretary.py "$@"` 한 줄짜리 `chavis-secretary` 래퍼를 둔다.
 
 ### 한계
 

@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 import agent
 import brief
+import scheduler
 import sources
 import tiers
 
@@ -29,13 +30,7 @@ WEEKDAY_WORDS = {name: index for index, names in enumerate(
     (('mon', '월'), ('tue', '화'), ('wed', '수'), ('thu', '목'), ('fri', '금'), ('sat', '토'), ('sun', '일')))
     for name in names}
 
-
-class Decision(Exception):
-    """Not a failure: the caller has to choose. Carries a JSON-ready payload."""
-
-    def __init__(self, payload):
-        super().__init__(payload.get('status', 'decision'))
-        self.payload = payload
+Decision = tiers.Decision
 
 
 def normal(title):
@@ -105,7 +100,7 @@ def task_lists(cfg, read):
 def pick_list(lists, wanted):
     if not wanted:
         return lists[0]
-    matches = [row for row in lists if normal(row.get('title')) == normal(wanted)]
+    matches = [row for row in lists if normal(row.get('title')) == normal(wanted) or row.get('id') == wanted]
     if len(matches) != 1:
         raise Decision({'status': 'list_not_found', 'wanted': wanted,
                         'available': [row.get('title', '') for row in lists]})
@@ -280,6 +275,15 @@ def main(argv=None):
     briefing = commands.add_parser('brief', help='print the integrated brief without sending it')
     briefing.add_argument('--scope', choices=['full', 'now', 'nudge'], default='full')
     briefing.add_argument('--live', action='store_true', help='re-read Google Tasks instead of the snapshot')
+    scheduling = commands.add_parser('schedule', help='schedule a task with a dedicated calendar slot')
+    scheduling.add_argument('--title', required=True)
+    scheduling.add_argument('--when', required=True, help='e.g. "화요일 오후", "내일 14:00", "수요일 (1시간)"')
+    scheduling.add_argument('--duration', default='2h', help='duration (e.g. 1h, 2h, 30m, 90m, default: 2h)')
+    scheduling.add_argument('--calendar', default='primary', help='Google Calendar name or ID')
+    scheduling.add_argument('--list', default='', dest='list_name', help='Google Tasks list')
+    scheduling.add_argument('--notes', default='', help='additional notes')
+    scheduling.add_argument('--allow-duplicate', action='store_true')
+    scheduling.add_argument('--dry-run', action='store_true')
     commands.add_parser('lists', help='task list names')
     args = parser.parse_args(argv)
     try:
@@ -291,6 +295,19 @@ def main(argv=None):
         if args.command == 'add':
             result = add(cfg, now, args.title, args.due, args.list_name, args.notes,
                          args.allow_duplicate, args.allow_past, args.dry_run, snapshot=snapshot_tasks(cfg, now))
+        elif args.command == 'schedule':
+            duration_mins = scheduler.parse_duration_minutes(args.duration, default=120)
+            result = scheduler.schedule(
+                cfg, now,
+                title=args.title,
+                when=args.when,
+                duration_minutes=duration_mins,
+                calendar_id=args.calendar,
+                list_name=args.list_name,
+                notes=args.notes,
+                allow_duplicate=args.allow_duplicate,
+                dry_run=args.dry_run
+            )
         elif args.command == 'done':
             result = complete(cfg, now, args.query, args.dry_run)
         elif args.command == 'due':

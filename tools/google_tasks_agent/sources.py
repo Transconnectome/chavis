@@ -87,6 +87,44 @@ def events_on(events, day, now=None):
     return chosen
 
 
+def create_calendar_event(cfg, title, start_dt, end_dt, calendar_id='primary', description='', dry_run=False, read=None):
+    """Create an event on Google Calendar using gog."""
+    from agent import gog_json
+    read_fn = read or gog_json
+    command = [
+        'calendar', 'create', calendar_id,
+        '--summary', title,
+        '--from', start_dt.isoformat(),
+        '--to', end_dt.isoformat(),
+    ]
+    if description:
+        command += ['--description', description]
+    if dry_run:
+        command.append('--dry-run')
+    res = read_fn(cfg, command)
+    if dry_run:
+        return {'status': 'dry_run', 'title': title, 'start': start_dt.isoformat(), 'end': end_dt.isoformat(),
+                'calendar': calendar_id}
+    event = res.get('event', res)
+    return {
+        'status': 'created',
+        'id': event.get('id', ''),
+        'htmlLink': event.get('htmlLink', ''),
+        'summary': event.get('summary', title),
+        'start': start_dt.isoformat(),
+        'end': end_dt.isoformat(),
+        'calendar': calendar_id,
+    }
+
+
+def delete_calendar_event(cfg, event_id, calendar_id='primary', read=None):
+    """Delete an event on Google Calendar using gog."""
+    from agent import gog_json
+    read_fn = read or gog_json
+    command = ['calendar', 'delete', calendar_id, event_id, '--force']
+    return read_fn(cfg, command)
+
+
 def fetch_mail(cfg, now, read):
     """Unread important threads with a deadline hint, or None when mail cannot be read."""
     try:
