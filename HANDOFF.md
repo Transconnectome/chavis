@@ -1,8 +1,52 @@
 # Chavis 인수인계
 
-갱신: 2026-09-18. 이번 작업은 Google Tasks 개인 리마인더의 구현·운영과 Git 인계다.
-저장소 `/home/juke/git/chavis`, 브랜치 `main`, 대상 `origin/main` (`Transconnectome/chavis`, 공개 저장소).
-이전 철학 에이전트와 Codex Coach 기록은 아래에 당시 상태로 보존한다.
+갱신: 2026-09-21. 이번 작업은 Google Tasks 에이전트의 OAuth 7일 만료 장애 복구, Google Tasks 업무 우선순위 동기화, 데몬 정상화 검증이다.
+저장소 `/home/juke/git/chavis`, 브랜치 `main`, 대상 origin/main (GitHub 외부 저장소: Transconnectome/chavis).
+이전 2026-09-18 작업과 철학 에이전트·Codex Coach 기록은 아래에 당시 상태로 보존한다.
+
+## 현재 상태
+
+2026-09-21 09:10:02 KST에 발생했던 Google OAuth Refresh Token 7일 수명 만료 장애(Google Cloud 테스트 앱 정책)를 gog 1회성 브라우저 승인 및 keyring 갱신으로 복구 완료했다.
+`google-tasks-agent.service`와 타이머가 정상 동작하여 5분 주기 자동 수집·요약이 재개되었다 (status: healthy, 연속 실패 0회).
+또한 Google Calendar, Gmail, Google Tasks 3자 교차 검증을 통해 차지욱 교수의 당일 우선순위 태스크 4건 신규 등록, 완료된 행정 업무 4건 완료 처리, 기한/메모 2건 보강을 실시간 Google Tasks API로 동기화 완료했다.
+
+## 다음 작업
+
+1. `python3 tools/google_tasks_agent/agent.py status`로 데몬 및 조회 건강 상태(healthy)를 수시 확인한다.
+2. 2026-09-28 09:43 KST 전후로 예상되는 차기 7일 OAuth 만료 시점에 README.md의 갱신 절차에 따라 재인증을 1분 내 수행한다.
+3. 2026-09-22 예정된 연쇄 회의(09:00 랩미팅, 12:00 이노에듀, 16:00 fMRI 팀미팅 등)에 대비하여 등록된 피치디자인 견적 의뢰(2026-09-22 예정), 베리타스 강좌 2 eTL Q&A 확인(2026-09-22 예정)을 처리한다.
+4. 2026-09-23 마감인 KORCI CWS 웨비나 발표 초록 및 영문 약력 제출 건을 추석 연휴 전 회신한다.
+
+## 산출물
+
+- `tools/google_tasks_agent/README.md`: 2026-09-21 OAuth 토큰 7일 만료 원인 분석, 브라우저 승인 및 token import 복구 절차, 태스크 쓰기 및 변경 알림 검증 내역 추가.
+- Google Tasks 실제 반영 완료:
+  - 완료 처리 (4건): 승진/정년보장 심사위원 추천 서식 11·12 제출, 참여교수 서약서 제출 등.
+  - 신규 등록 (4건): Ezbaro 상시점검 보완요청 (2026-09-21), 슬랙 결제 갱신 (2026-09-21), GARD ROCF 데이터 연계 (2026-09-21), 베리타스 강좌 Q&A (2026-09-22).
+  - 내용 갱신 (2건): 피치디자인 M동 인테리어 비교 견적(2026-09-22 기한 지정), 논자시 구글시트 채점 링크 메모 추가.
+- `HANDOFF.md`: 2026-09-21 운영 인수인계 스냅샷 갱신.
+
+## 결정 대기
+
+- 현재 Google Cloud OAuth 앱이 Testing 모드(게시되지 않음)로 운영 중이어서 Refresh Token 유효기간이 7일로 제한됨. 장기 무중단 운영을 위해 GCP 콘솔에서 OAuth 동의 화면을 In Production(프로덕션)으로 게시하거나 내부(Internal) 앱으로 전환할지 여부는 사용자 결정 필요.
+
+## 함정
+
+- gog의 Google Tasks 쓰기/조회는 `~/.config/gogcli/env.sh`의 GOG_KEYRING_PASSWORD 환경변수가 주입되어야 작동한다. systemd unit에는 `EnvironmentFile=-%h/.config/google-tasks-agent/environment`로 해결되어 있으나 대화형 셸에서 CLI 실행 시 `source ~/.config/gogcli/env.sh`를 빠뜨리면 안 된다.
+- `~/.config/gws-integration/token.json`은 캘린더와 Gmail 권한만 보유하고 있으므로 Google Tasks API 쓰기는 반드시 gog 또는 키링 인증 토큰을 통해 수행해야 한다.
+
+## 인벤토리
+
+- 실행 코드: `tools/google_tasks_agent/agent.py`
+- 설치기: `tools/google_tasks_agent/install.py`
+- 문서: `tools/google_tasks_agent/README.md`
+- 회귀 검사: `tools/google_tasks_agent/test_agent.py`, `tools/google_tasks_agent/test_public_config.py`
+- 로컬 운영 설정 (Git 제외): `~/.config/google-tasks-agent/config.json`
+- 로컬 운영 상태 DB (Git 제외): `~/.local/state/google-tasks-agent/state.sqlite`
+
+---
+
+## 이전 작업 기록 — Google Tasks 개인 리마인더 최초 설치 (2026-09-18)
 
 ## Google Tasks 에이전트: 바로 시작할 곳
 
@@ -38,7 +82,7 @@ python3 tools/google_tasks_agent/agent.py status
 - 운영 설정: `~/.config/google-tasks-agent/config.json`. 계정은 여기에서만 공급한다.
 - 상태·스냅샷·전송 영수증·설치 manifest: `~/.local/state/google-tasks-agent/`. 최초 상세 README는 같은 디렉터리의 `handoff-local-README-20260918.md`에 보존한다.
 - 개인 Telegram 경로: `~/.local/state/codex-coach/telegram-route.json`. Google/OpenClaw 자격증명과 실제 task 본문·개인 식별자는 커밋하지 않는다. Git push는 이 비공개 자료와 설치된 user unit의 백업이 아니다.
-- 인계 시작 시 fetch 뒤 `HEAD...origin/main`은 0/0, index는 비어 있었다. 커밋 범위는 이 `HANDOFF.md`와 `tools/google_tasks_agent/`의 소스·합성 테스트·README만이다.
+- 인계 시작 시 fetch 뒤 HEAD...origin/main 은 0/0, index는 비어 있었다. 커밋 범위는 이 `HANDOFF.md`와 `tools/google_tasks_agent/`의 소스·합성 테스트·README만이다.
 - 기존 루트 `README.md`, `tests/test_notion_sync.py`, `tools/codex_coach/`의 수정, `skills/explore/`, `tools/audio_powerlaw/`, `tools/local_explore/`, `tools/codex_capabilities/`, 대시보드 PNG는 제외한다.
 - 이 문서를 담을 커밋과 push의 성공 여부·최종 SHA는 완료 응답에서 실제 원격 조회 결과로 보고한다.
 
@@ -48,7 +92,7 @@ python3 tools/google_tasks_agent/agent.py status
 
 아래 “현재 작업”, “이번 인계”와 날짜별 상태는 당시 기록이다.
 
-갱신: 2026-09-14. 현재 작업은 차지욱 교수 철학 에이전트다. 저장소 `/home/juke/git/chavis`, 브랜치 `main`, push 대상 `origin/main` (`Transconnectome/chavis`, 공개 저장소). 아래 Codex Coach 인계는 이전 작업의 역사적 기록으로 보존한다.
+갱신: 2026-09-14. 현재 작업은 차지욱 교수 철학 에이전트다. 저장소 `/home/juke/git/chavis`, 브랜치 `main`, push 대상 `origin/main` (Transconnectome/chavis, 공개 저장소). 아래 Codex Coach 인계는 이전 작업의 역사적 기록으로 보존한다.
 
 ## 차교수 철학 에이전트: 지금 시작할 곳
 
@@ -85,7 +129,7 @@ Gmail 전체 스레드 22개·171개 메시지에 대해 후속 정정·조건·
 - 운영 저장소: `/home/juke/.local/share/cha-philosophy/evidence.sqlite3`; 설정은 같은 디렉터리의 `config.json`, 최신 주기 결과는 `refresh_status.json`.
 - 스레드 수정 작업 사본: `/home/juke/.local/share/cha-philosophy/thread-context-stage-20260913/`.
 - 같은 사본의 `reviewed_thread_migration_plan_20260913.json`: 실제 원격 재조회, 22개 검토 family manifest, 17개 검토된 원칙의 revision 연결, 76개 자료의 좁은 편집 링크 가림 계획. 운영 변경 0인 별도 사본 검증 결과다.
-- 같은 사본의 `reviewed-thread-final-canary/evidence.sqlite3`, `small_family_semantic_review.json`, `middle_family_semantic_review.json`, `large_family_semantic_review.json`: 검토 결과와 원문 대응. 직접 읽기 허용 범위 안에서만 사용하고 새 모델·외부 서비스로 보내지 않는다.
+- 같은 사본의 `reviewed-thread-final-canary/evidence.sqlite3` (작업 사본 파일, 현재 트리에 아직 없음), `small_family_semantic_review.json`, `middle_family_semantic_review.json`, `large_family_semantic_review.json`: 검토 결과와 원문 대응. 직접 읽기 허용 범위 안에서만 사용하고 새 모델·외부 서비스로 보내지 않는다.
 - 같은 사본의 `prepare_reviewed_migration.py`: 당시 준비 과정의 로컬 스크립트. 기존 결과를 덮어쓰지 않도록 되어 있으며 운영 적용 스크립트가 아니다. 무작정 재실행하지 말고 현재 source hash·membership·원칙·제외 상태를 다시 비교한다.
 - 이관 전 자료를 다시 읽어 명시적 revision review를 준비한다. 자동 context binding을 실제 읽기 표시로 대체하지 않는다. 순수 로컬 가림으로 `verified_at`을 갱신하지 말고, 원격 확인 시각·재개 위치·무관한 자료를 보존한다.
 - 이번 인계 백업: `/home/juke/.local/share/cha-philosophy/handoff-push-20260914/`. 기존 상세 `RESEARCH_REPORT.md`·`PLAN.md`, 이전 `HANDOFF.md`, 운영 readback, 패치 재구성 검증을 보존했다. 현재 공개 보고서는 개인 사례를 제외한 요약이다.
@@ -96,7 +140,7 @@ Gmail 전체 스레드 22개·171개 메시지에 대해 후속 정정·조건·
 
 이번 인계에서 운영 버전의 `python3 -m pytest -q tools/cha_philosophy/tests`가 **824 passed (49.15s)**였다. anyio 플러그인 재작성 경고 1개가 있었고 실패는 없었다. 패치 적용 사본은 이전 **883 passed (60.61s)** 결과와 모든 Python 해시가 일치했다. 실제 네트워크·추론·의미 정확도·미래 성능을 이 검사 수로 입증하지 않는다. 기존 유료 sycophancy 벤치마크는 변경 범위 밖이라 실행하지 않았다.
 
-인계 시작 시 `git fetch origin` 뒤 `HEAD...origin/main`은 0/0, staged 변경은 없었다. 이번 커밋은 이 HANDOFF와 철학 에이전트 경로에 한정한다. 기존 루트 `README.md`, `tests/test_notion_sync.py`, `tools/codex_coach/`의 변경, `tools/audio_powerlaw/`, `tools/local_explore/`, `skills/explore/`, 나머지 `docs/`, 대시보드 PNG는 제외한다. 기존 작업을 정리·삭제·일괄 stage하지 않는다.
+인계 시작 시 `git fetch origin` 뒤 HEAD...origin/main 은 0/0, staged 변경은 없었다. 이번 커밋은 이 HANDOFF와 철학 에이전트 경로에 한정한다. 기존 루트 `README.md`, `tests/test_notion_sync.py`, `tools/codex_coach/`의 변경, `tools/audio_powerlaw/`, `tools/local_explore/`, `skills/explore/`, 나머지 `docs/`, 대시보드 PNG는 제외한다. 기존 작업을 정리·삭제·일괄 stage하지 않는다.
 
 이 요청은 인계·커밋·해당 브랜치 push를 승인한다. 배포·모델 재시작·원격 문서 게시·비공개 원자료 공개는 추가하지 않는다. Git은 비공개 DB·원문·평가 산출물·모델·인증·설치된 서비스 및 로컬 이관 계획을 백업하지 않는다. 이번 커밋의 SHA와 실제 원격 검증은 완료 응답에서 보고한다.
 
@@ -108,7 +152,7 @@ Gmail 전체 스레드 22개·171개 메시지에 대해 후속 정정·조건·
 
 # Codex Coach 인수인계
 
-갱신: 2026-09-12. 대상 저장소 `/home/juke/git/chavis`, 브랜치 `main`, 원격 `origin/main` (`Transconnectome/chavis`, 공개 저장소).
+갱신: 2026-09-12. 대상 저장소 `/home/juke/git/chavis`, 브랜치 `main`, 원격 origin/main (Transconnectome/chavis, 공개 저장소).
 
 ## 다음 작업 시작
 

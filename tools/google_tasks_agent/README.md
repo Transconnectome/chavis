@@ -104,6 +104,18 @@ timer 파일만 존재하는 상태를 지속 운영 완료로 기록하지 않�
 - `systemd-analyze --user verify` 통과. `Linger=yes`로 로그인 종료 후에도 user manager 실행 유지.
 - config·SQLite `0600`, 상태 디렉터리 `0700`. 인증 토큰은 복사하지 않았다.
 
-위 기록은 최초 설치 시점의 검증이다. 다음 세션은 상태 명령으로 현재 운영 상태를 다시 확인한다.
+## 실제 운영 확인 기록 (2026-09-21, KST) — OAuth 토큰 7일 만료 대응
+
+- **현상**: 2026-09-14 09:09 발급된 Google OAuth Refresh Token이 Google Cloud Testing 앱 7일 만료 정책(168시간)에 따라 2026-09-21 09:10:02 KST에 정확히 만료(`invalid_grant`, `google_read_failed` 발생). 3회 연속 실패 후 09:20 health 장애 알림 Telegram 정상 발송 확인.
+- **복구 절차**:
+  1. `source ~/.config/gogcli/env.sh && gog auth add <account> --remote --step 1 --timeout 30m` 으로 1회성 브라우저 승인 URL 생성.
+  2. 브라우저 승인 후 리다이렉트된 콜백 URL의 `code`를 구글 OAuth2 엔드포인트(`https://oauth2.googleapis.com/token`)와 직접 교환하여 최신 refresh_token 수령.
+  3. `gog auth tokens import` 명령을 통해 새 토큰을 keyring에 반영.
+  4. 복구 즉시 `google-tasks-agent.service` 재기동 확인 (`Result=success`, `ExecMainStatus=0`, `consecutive_failures=0`).
+- **태스크 쓰기 및 변경 알림 검증**:
+  - Google Tasks API를 통해 완료된 업무(승진 심사위원 추천, 대학원 서약서 등) 4건 완료 처리 및 신규 우선순위 업무(Ezbaro 보완, 슬랙 결제 갱신, GARD 데이터 연계 등) 4건 등록·기한 지정.
+  - 09:45:04 예약 tick에서 변경 감지 알림(`changes:2026-09-21:09`)이 Telegram 메시지 영수증과 함께 정상 전송됨을 확인.
+
+위 기록은 운영 검증의 일환이다. 다음 세션은 상태 명령으로 현재 운영 상태를 다시 확인한다.
 공개본 정리에서는 개인 계정 기본값과 실제 작업 통계·영수증 ID를 제거했다.
 기존 운영 config와 원본 기록은 로컬에 보존한다. 현재 Git 인계는 저장소 루트 `HANDOFF.md`를 따른다.
